@@ -1,0 +1,21 @@
+{
+  "site": "https://kairo.aakritigupta7227.workers.dev",
+  "eventId": 1,
+  "tokenId": "1",
+  "attendee": "0x35539F1dA35751066689d144E6225804D9729329",
+  "createTransaction": "0x9572420d4eb58d02847b2eba208ba5a901189f7c0afa7438801bb01fb8252466",
+  "mintTransaction": "0xf7e9aaad7ff83c11a1b5f8df4d36acbd14e1099426652b94e4d9dc9502743d7f",
+  "totalGasETH": "0.000000142055284089",
+  "verified": true,
+  "checks": [
+    "live authentication",
+    "R2 artwork",
+    "event publication",
+    "RSVP",
+    "synthetic staff check-in",
+    "Worker relayer mint",
+    "ownership",
+    "locked token",
+    "collection"
+  ]
+}

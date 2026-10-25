@@ -1,0 +1,10 @@
+{
+  "site": "https://kairo-site-7fb.pages.dev",
+  "backend": "https://kairo.aakritigupta7227.workers.dev",
+  "homepageVerified": true,
+  "eventAPIVerified": true,
+  "adminSignatureLoginVerified": true,
+  "customDomain": "deferred",
+  "mintingPolicy": "staff attendance verification",
+  "sepoliaOnly": true
+}

@@ -6,15 +6,30 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "forge test && node --test backend/*.test.js",
+    "test": "forge test && node --test backend/*.test.js serverless/*.test.js frontend/*.test.js",
     "test:contracts": "forge test",
-    "start": "node --env-file=.env backend/server.js",
-    "deploy:sepolia": "node --env-file=.env scripts/deploy.js"
+    "start": "npm run dev",
+    "start:legacy": "node --env-file=.env backend/server.js",
+    "build": "node scripts/build-frontend.js",
+    "dev": "npm run build && npm run db:local && wrangler dev --local-upstream localhost",
+    "db:local": "wrangler d1 migrations apply kairo --local",
+    "deploy:app": "npm run build && wrangler deploy",
+    "preflight:app": "node scripts/preflight-app.js",
+    "secrets:app": "node scripts/upload-runtime-secrets.js",
+    "deploy:sepolia": "node --env-file=.env scripts/deploy.js",
+    "smoke:sepolia": "node --env-file=.env scripts/smoke-sepolia.js",
+    "deploy:pages": "npm run build && node scripts/deploy-pages.js"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.0.2",
     "ethers": "6.17.0",
     "express": "5.3.0",
+    "jsqr": "1.4.0",
+    "qrcode": "1.5.4",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "wrangler": "4.149.0"
   }
 }

@@ -1,0 +1,11 @@
+{
+  "url": "https://kairo.aakritigupta7227.workers.dev",
+  "customDomain": "poap.ntlap.in",
+  "workerUploaded": true,
+  "databaseMigrations": "current",
+  "runtimeSecrets": "synchronized",
+  "verification": "HTTPS API and real end-to-end mint verified",
+  "customDomainStatus": "blocked: ntlap.in zone not accessible in authenticated account",
+  "liveMintVerified": true,
+  "liveMintReport": "deployments/app-smoke.json"
+}

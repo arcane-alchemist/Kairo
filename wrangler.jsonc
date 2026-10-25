@@ -1,0 +1,63 @@
+{
+  "name": "kairo",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "poap.ntlap.in",
+      "zone_name": "ntlap.in",
+      "custom_domain": true
+    }
+  ],
+  "main": "serverless/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "vars": {
+    "CONTRACT_ADDRESS": "0x999524Cb77Db83864DA6FAC42614387921933922",
+    "MAX_FEE_GWEI": "10",
+    "SITE_ORIGIN": "https://kairo-site-7fb.pages.dev",
+    "ISSUER_ADDRESS": "0xA6db1b3944999e6953532a4EB6031f2B5DC36a26"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kairo",
+      "database_id": "3bb094ae-f896-4aee-b83d-c89b6ec0f7b0",
+      "migrations_dir": "serverless/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "kairo-media"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MINT",
+        "class_name": "MintCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "MintCoordinator"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  },
+  "preview_urls": false
+}

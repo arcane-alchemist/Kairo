@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0c18"><meta name="description" content="Show up. Make memories. Collect your campus story with Kairo.">
+  <title>Kairo — Your campus, collected.</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="#explore"><span class="brand-mark">✳</span> kairo<span class="brand-dot">.</span></a>
+    <div class="campus"><span class="campus-icon">⌂</span><div><strong>Your campus</strong><small>A little more connected</small></div></div>
+    <p class="nav-label">YOUR WORLD</p>
+    <nav aria-label="Main navigation">
+      <a href="#explore" data-nav="explore"><span>◈</span> Discover events</a>
+      <a href="#collection" data-nav="collection"><span>▦</span> My collection</a>
+      <a href="#profile" data-nav="profile"><span>◎</span> Participation profile</a>
+      <a href="#tickets" data-nav="tickets"><span>▤</span> My RSVPs</a>
+      <div class="nav-divider"></div><p class="nav-label">MAKE IT HAPPEN</p>
+      <a href="#organizer" data-nav="organizer"><span>⚑</span> Organizer space</a>
+      <a href="#create" data-nav="create"><span>⊕</span> Create an event</a>
+    </nav>
+    <div class="sidebar-note"><span>✧</span><strong>Good times. Yours forever.</strong><p>Little keepsakes for the moments you were part of.</p><a href="#about">How Kairo works ↗</a></div>
+    <div class="network"><span class="network-dot"></span> Sepolia testnet <small>COLLEGE EDITION</small></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><span class="breadcrumb">Your presence. Your story.</span><div class="header-actions"><button id="install-app" class="button button-light button-small" hidden>Install Kairo ↓</button><button id="wallet-network" class="network-button" aria-label="Active wallet network; request switch to Sepolia">Sepolia testnet</button><a class="help-link" href="#about">How it works</a><button id="wallet" class="button button-small">Connect wallet <span>↗</span></button></div></header>
+    <div id="connection-state" class="connection-banner" role="status" aria-live="polite"></div>
+    <main id="main" tabindex="-1"></main>
+    <footer><span>Made for showing up.</span><span>Kairo © <span id="copyright-year"></span> <span class="footer-star">✳</span> Memories over marketplaces.</span></footer>
+  </div>
+  <dialog id="modal" aria-label="Kairo details"><button class="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

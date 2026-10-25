@@ -1,68 +1,151 @@
-# Kairo
+# Kairo — Your campus, collected.
 
-College-event attendance collectibles: permanently soulbound, non-burnable ERC-721 tokens with ERC-5192 recognition. Sepolia prototype; not official academic credentials.
+College-event RSVPs, verified in-person check-in, and permanent soulbound collectibles on Sepolia. One deployed ERC-721 contract serves all events. The responsive frontend draws on POAP’s organizer/collector flows with original Kairo branding and artwork.
 
-## Setup and checks
+## What is implemented
 
-Requires Node 24+, npm, and Foundry (`forge`, `anvil`).
+- Live event discovery with 15-second refresh, category filters and search, remaining capacity, event details and public RSVP.
+- Address-only attendee registration, wallet-QR scanning, permanent-collectible consent and downloadable ticket QR.
+- Organizer wallet sign-in using an expiring, single-use signature challenge and HttpOnly session cookie.
+- College-admin event publication: artwork upload or badge generator, preview, frozen metadata, wallet-confirmed on-chain event creation and resumable publication.
+- Event-scoped organizer dashboard, attendee list, ticket scanner, audited check-in, issuer permission changes and issuance pause/resume.
+- Sponsored mint jobs, receipt status and confirmed-collectible gallery.
+- Installable PWA with an offline shell and public discovery cache. Authenticated APIs, wallet lookups and private ticket data are never cached.
 
-```sh
-npm ci
-npm test
-forge fmt --check
-cp .env.example .env
+## Serverless architecture
+
+```text
+Browser / installable web app
+           |
+Cloudflare Worker + static assets
+   |            |             |
+  D1           R2       MintCoordinator Durable Object
+registrations artwork     alarm-driven serial mint queue
+sessions      metadata                  |
+audit trail                         Sepolia Kairo
 ```
 
-Never commit `.env` or paste private keys into chat. Use dedicated testnet wallets. The admin creates events and manages issuers; the backend uses a separate issuer wallet with test ETH. No attendee gas payment is required.
+There is no always-running Express server or interval-based worker in the new app. A Durable Object serializes use of one dedicated issuer wallet and wakes only for queued work. A 15-minute recovery trigger wakes saved jobs after an interrupted check-in and cleans expired authentication/rate-limit records. `backend/` is the earlier local prototype, retained under `npm run start:legacy`; it is not deployed by Wrangler.
 
-## Sepolia deployment
+## Local development
 
-Set `SEPOLIA_RPC_URL` and `DEPLOYER_PRIVATE_KEY` in `.env`. Optionally set `ADMIN_ADDRESS` to a separate admin. Then:
+Requires Node 24+, npm and Foundry.
 
 ```sh
+git submodule update --init --recursive
+npm ci
+cp .dev.vars.example .dev.vars
+npm run db:local
+npm run dev
+```
+
+Open `http://localhost:8787/` for the connected app. No sample events or preview mode are shipped. Empty databases show an empty state; API outages show an error. Publish events from the deployed HTTPS app so immutable metadata URLs are publicly accessible.
+
+Set these in ignored `.dev.vars`:
+
+- `SEPOLIA_RPC_URL`: Sepolia RPC endpoint.
+- `ISSUER_PRIVATE_KEY`: dedicated, funded Sepolia relayer wallet. Never use it for other transactions while the queue runs.
+- `ISSUER_ADDRESS`: the same wallet’s public address, used by the creation form.
+- `STUDENT_HASH_SECRET`: independent random secret with at least 32 characters; back it up with D1.
+
+The deployer key is never used by the serverless API. The college admin connects their wallet in the browser to publish an event. The event’s initial issuer must match the configured relayer. Organizers can grant additional event issuer permissions in the dashboard; the contract allows these trusted issuers to mint directly, so grant access carefully.
+
+For new event artwork, upload PNG/JPEG up to 1 MB or generate a badge. R2 keys include a content hash; uploaded metadata is frozen before the on-chain event is created. Use a stable production domain for event creation: local `localhost` metadata URLs cannot be read by external wallets. Back up the bucket; content-addressed URLs still depend on hosting availability. No student identifiers belong in collectible metadata.
+
+## Cloudflare deployment
+
+The website is deployed on Cloudflare Pages at https://kairo-site-7fb.pages.dev. Pages forwards same-origin API requests to the existing Worker at https://kairo.aakritigupta7227.workers.dev, with the remote `kairo` D1 database, all three migrations applied, the `kairo-media` R2 bucket, and all three runtime secrets. The homepage and D1-backed event API passed live checks. The requested custom domain `poap.ntlap.in` is configured in Wrangler, but attachment is pending because Cloudflare reports that the `ntlap.in` zone does not exist in the authenticated account. Once the zone is active in the deployment account, rerun `npm run deploy:app` to attach the custom domain. Run `npm run preflight:app` to verify the contract, runtime secrets and relayer funding before deployment.
+
+```sh
+npx wrangler login
+npx wrangler d1 create kairo
+npx wrangler r2 bucket create kairo-media
+```
+
+Replace the placeholder `database_id` in `wrangler.jsonc` with the D1 command’s returned ID. Keep `CONTRACT_ADDRESS` set to the deployed Sepolia contract. Configure `ISSUER_ADDRESS` in Wrangler vars (public, not a secret). Choose `MAX_FEE_GWEI` for your testnet budget; the relayer waits/retries instead of signing above this ceiling.
+
+```sh
+npx wrangler secret put SEPOLIA_RPC_URL
+npx wrangler secret put ISSUER_PRIVATE_KEY
+npx wrangler secret put STUDENT_HASH_SECRET
+# Or use npm run secrets:app to upload only runtime secrets from .dev.vars via stdin.
+npx wrangler d1 migrations apply kairo --remote
+npm run deploy:app
+```
+
+Wrangler deploys the API, static assets and Durable Object. D1, R2, Workers and Durable Objects have their own platform limits and billing; serverless does not guarantee free hosting. Configure a stable domain before publishing real event metadata. Do not upload `.env`, `.dev.vars`, test wallet journals or RPC credentials to GitHub or hosting assets.
+
+## Gas policy
+
+- Discovery, signatures, artwork uploads, RSVPs and check-ins are off-chain: no blockchain gas.
+- The admin pays testnet gas to create an event or change on-chain permissions.
+- Attendees pay no gas. The dedicated relayer pays for each attendance mint after verification.
+- The deployed contract requires one transaction per attendee; the app does not claim cheaper per-mint gas or implement batching. Gas estimation and an EIP-1559 fee ceiling avoid signing during excessive fees; they do not guarantee the lowest future fee.
+- Extend the mint end time beyond the physical event so queued transactions can finish. Queue processing is conservative: one unresolved signed transaction at a time. Larger events need pipelined nonces or a separately reviewed batching contract before promising fast mass minting.
+
+## Contract and deployment
+
+`contracts/Kairo.sol` provides event-specific metadata, organizers, revocable issuer allowlists, caps, windows and issuance pauses. Every token is permanently locked (ERC-5192); transfer, approvals and even internal burn fail. No proxy, unlock or metadata setter exists. Admin event management does not automatically grant mint permission.
+
+The Sepolia deployment is recorded in `deployments/sepolia.json`. To deploy another instance:
+
+```sh
+cp .env.example .env
+# Configure RPC, deployer key and optional ADMIN_ADDRESS locally.
 npm run deploy:sepolia
 ```
 
-The script checks chain ID 11155111, builds and deploys the single Kairo contract, broadcasts and records the address/transaction in `deployments/sepolia.json`. Set `CONTRACT_ADDRESS` to the recorded `address`. Deployment does not automatically verify source on Etherscan. Use Foundry verification with constructor arguments matching the deployment record before a public pilot.
+The optional `npm run smoke:sepolia` script creates a permanent demo event and issues a non-burnable NFT to a disposable test wallet. It has not been run. Its ignored `data/sepolia-smoke.json` journal contains the test key and signed payloads. Keep it private. Source verification on Etherscan is also pending.
 
-Create an event using the admin wallet in `DEPLOYER_PRIVATE_KEY`:
+## Checks and practical limits
 
 ```sh
-node --env-file=.env scripts/create-event.js ipfs://YOUR_METADATA_CID 100 START_UNIX END_UNIX ORGANIZER_ADDRESS ISSUER_ADDRESS
+npm test
+npm run build
+forge fmt --check
 ```
 
-Metadata should contain `name`, `description`, and an `image` URI. Pin the artwork and metadata yourself; the contract freezes the URI immediately, but HTTP content could still change. Never put student identifiers in metadata. Set the mint end time late enough for queued transactions to confirm after check-in.
+Contract tests cover isolation between events, authorization, metadata, caps, duplicates, mint windows, pause, receiver rollback, transfer variants, approvals and internal burns. Serverless tests exercise real SQLite SQL behind a D1-shaped adapter, signature replay rejection, cross-event staff isolation, consent/capacity validation, audited idempotent check-in, frozen-artwork publication and durable mint retry behavior. These are not real-chain or Cloudflare-production integration tests.
 
-For local deployment, run `anvil`, configure `LOCAL_RPC_URL=http://127.0.0.1:8545` and a disposable Anvil key, then `node --env-file=.env scripts/deploy.js --local`. Never use an Anvil key on a public network.
+- Staff must check physical presence and college identity; the ID entered at check-in must match the hashed RSVP ID. Public RSVP does not prove ownership of a student ID or wallet. Rate limits limit abuse but do not replace verified college sign-in; add college SSO before relying on this for official attendance.
+- RSVP IDs are bearer ticket secrets. Keep QR codes private. Consent timestamps and staff wallet/timestamps are stored, not raw student IDs.
+- The directory returns up to 200 events; the staff table displays up to 1,000 registrations. Paginate before those limits. The web collection checks ownership directly against the configured Kairo contract in pages; the legacy `/api/collection` endpoint remains database-only for existing clients.
+- Unsigned jobs fail after ten attempts. Unresolved signed transactions retain their nonce and block later mints; deep reorg recovery remains future work. Transactions unresolved for two minutes can be replaced using the same nonce and calldata, with bumped fees capped by MAX_FEE_GWEI; receipts from every attempt are checked. Event staff can retry failed jobs from the dashboard; submitted jobs cannot be reset because their nonce is unresolved. All signed attempts are retained in mint_transactions.
+- Hosted metadata remains available only while its bucket/domain are maintained. Back up D1 and R2; a token surviving on-chain does not ensure its artwork survives.
+- Wallet loss or a wrong destination cannot be corrected by transferring or burning. Sepolia assets are testnet collectibles, not permanent academic credentials.
+- Organizer login currently supports externally owned wallets via injected Ethereum providers. Contract-wallet signature login and native app-store builds are not included.
 
-## Backend foundation
 
-Set `ISSUER_PRIVATE_KEY`, `CONTRACT_ADDRESS`, independent random `STAFF_API_TOKEN` and `STUDENT_HASH_SECRET` values (32+ characters each), then `npm start`. The server binds to localhost, checks Sepolia and verifies event-specific issuer permission at check-in, and stores data in SQLite. Place behind HTTPS before remote use. Back up the database and hashing secret together.
+### Pages deployment and mobile app
 
-All endpoints except `/health` require `Authorization: Bearer STAFF_API_TOKEN`. This is an operator-only foundation, not public signup or club-scoped authentication.
+Run `npm run deploy:pages` to build and publish the website. The deploy script stages the Pages config and Functions in ignored `.wrangler/pages-site`; the root Wrangler config remains dedicated to the minting Worker. Pages has no private keys: its API proxy forwards requests to the Worker and rejects cross-origin mutations. The Pages homepage, event API and admin message-signature login were verified live. Custom domain setup is deferred.
 
-| Endpoint | Body / result |
-| --- | --- |
-| `POST /registrations` | `{ "eventId": 1, "studentId": "college-issued-id", "wallet": "0x…" }`; returns registration ID |
-| `POST /registrations/:id/check-in` | `{ "physicallyVerified": true, "permanentCollectibleConsent": true }`; returns mint job |
-| `GET /jobs/:id` | Mint status, transaction hash and safe error message |
+Capacity 0 means unlimited: the creator uses the uint64 maximum on-chain, and D1 stores 0 as the unlimited sentinel. Finite capacity defaults to 50. Publishing creates a Drop ID; the drop page provides a downloadable QR linking to the real deployed drop. Staff attendance verification remains required. A QR cannot bypass it.
 
-Staff must actually verify student identity, attendance, consent and wallet destination. The booleans record staff confirmation; software cannot establish physical presence itself. Address-only entry does not prove wallet ownership. Each student and wallet can register once per event. IDs are stored as keyed hashes, not raw identifiers; hashed identifiers are still sensitive.
+The standalone native mobile project, setup, tests, and APK build instructions are in [app/README.md](app/README.md). All mobile source and dependencies remain inside app/. The Android JS bundle compiles; a signed APK and device QA are not yet complete.
 
-The single worker processes a durable queue serially. Signed transactions are stored before broadcast and reused after restart; two confirmations are required. Unsigned jobs fail after three unsuccessful attempts so later jobs can proceed. Do not run multiple backend instances against the same database or send other transactions from the issuer wallet. An unresolved signed transaction blocks the queue to avoid nonce conflicts: inspect RPC, balance, nonce and event window before manually intervening. Automatic fee replacement, deep reorg handling, club authentication, public RSVP, QR UI and gallery are next steps, not implemented yet.
 
-## Contract structure
+### Hacktober QR claims
 
-`contracts/Kairo.sol` serves all events from one ERC-721 collection. Each event has its own frozen metadata URI, organizer, issuer allowlist, capacity, mint window and pause state. Token IDs are globally unique and `eventFor(tokenId)` identifies their event. The college admin creates events and can manage any event; an organizer can manage issuers and pause only their own event. Minting always requires explicit authorization for that event—even the college admin has no automatic mint permission.
+Hacktober Drop #2 uses the organizer-approved public QR mode: any authenticated wallet can consent and claim once, up to 50 wallets, during 11 October 2026 9:30 AM–1 PM IST. RSVP remains closed. Other attendance-mode drops still require staff check-in. QR claims store `claimed_at` separately and never fabricate `checked_in_at`. The backend validates the wallet signature, event-specific policy, capacity, pause state, and on-chain mint window. The original uploaded PNG is preserved byte-for-byte. See deployments/hacktober.json and output/hacktober/drop-qr.png.
 
-Event creation takes `(uri, cap, startsAt, endsAt, organizer, issuer)`. Organizers/admins use `setEventIssuer(eventId, wallet, allowed)` to grant or revoke event-specific mint permission. Assign the backend issuer wallet separately to each event it should serve. Set `CONTRACT_ADDRESS` to the new deployment; the previous two-contract deployment ABI is incompatible.
+## Student experience refresh
 
-## Contract guarantees
+The web frontend uses a midnight design system, responsive event discovery, date/category/role filters, linked event and badge details, wallet profiles, and a read-only wallet connection. Only an explicit sign-in or write action requests a signature or network switch. Existing organizer and minting flows remain available.
 
-- Admin-only event creation, event-specific issuer minting, revocable event permissions.
-- Event capacity and mint windows, emergency pause of issuance.
-- One token per event/wallet; one student per event is enforced privately by the backend.
-- Transfers, approvals and even internal burns revert. No proxy, unlock, metadata setter, or burn entry point.
-- Wallet mistakes/loss cannot be repaired by moving or destroying tokens. Wallet control can still change outside the contract.
+Apply `serverless/migrations/0006_student_experience.sql` before running the updated API against an existing database:
 
-Tests cover permissions, interfaces, URI, caps, duplicates, mint windows, pause, transfer variants, approvals, internal burns, API validation, consent, idempotent check-in and mint retry reconciliation. This is not an independent security audit.
+```sh
+npm run db:local
+# For the hosted database, before deploying the Worker:
+npx wrangler d1 migrations apply kairo --remote
+npm run deploy:app
+# If serving the frontend through the existing Pages deployment as well:
+npm run deploy:pages
+```
+
+`GET /api/wallet-collection?wallet=0x…&cursor=1` checks the configured Sepolia Kairo contract directly, scanning ten event IDs per page. It returns the contract balance, verified ownership, available metadata, public issuance history, pending issuance count, and a continuation cursor. Tokens minted outside the app database are included. Missing metadata or issuance dates are labeled unavailable/unindexed; an RPC failure is never treated as an empty collection. This is a Kairo collection viewer, not an index of unrelated NFT contracts. Search/filter results and profile counts cover loaded records. Large collections can continue loading in the UI.
+
+Campus, eligibility and available roles are organizer-provided listing information. A registration records a requested role; staff must verify it at check-in. The existing contract does not encode roles, so they are staff records rather than on-chain role attestations. QR claims are labeled Collector and excluded from verified-participation metrics. Organization names are not independently verified. Cancellation requires a signed-in matching wallet and atomically removes only an unverified RSVP without a mint job.
+
+The PWA caches its shell, public discovery/configuration, and up to 60 content-addressed artwork/metadata resources. It excludes authenticated APIs, ticket secrets, staff data and wallet collections. Offline discovery is labeled as previously loaded content; verification and writes require connectivity. System typography and flat SVG badges work without external fonts or WebGL. Push notifications are not implemented.

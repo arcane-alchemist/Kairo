@@ -1,0 +1,22 @@
+{
+  "title": "Hacktober",
+  "description": "Celebrate the spirit of open source with Hacktoberfest 2026 at SRM AP!\nThis POAP commemorates a celebration of collaboration, creativity, and community-driven innovation. Representing the joy of building together, sharing knowledge, and contributing to Free and Open Source Software (FOSS), it honors everyone who takes a step toward making open source more accessible and impactful.",
+  "venue": "SRM University AP",
+  "club": "FOSS · SRM AP",
+  "category": "Technology",
+  "claimMode": "qr",
+  "eventStartsAt": 1791642600,
+  "eventEndsAt": 1791700200,
+  "rsvpDeadline": 1791639000,
+  "dropId": 2,
+  "url": "https://kairo-site-7fb.pages.dev/#drop/2",
+  "capacity": 50,
+  "mintStartsAt": 1791691200,
+  "mintEndsAt": 1791703800,
+  "artwork": "https://kairo.aakritigupta7227.workers.dev/media/art/a6c863301c5c6f7866a15056d32e09aa730882504b4c4dc1d857add9fb90c1ea.png",
+  "metadata": "https://kairo.aakritigupta7227.workers.dev/media/metadata/df66406dca9d7794fc3814092420fa5d8fb806c2548eb97d8a5e677482bb1ec9.json",
+  "contract": "0x999524Cb77Db83864DA6FAC42614387921933922",
+  "createTransaction": "0xb4350010e67e8e5f125c41a3d4c38bf85df6fc116348ec064bd567f3cb7afdd3",
+  "creationGasETH": "0.00000092388785811",
+  "minted": 0
+}

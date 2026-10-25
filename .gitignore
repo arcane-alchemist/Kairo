@@ -5,3 +5,6 @@ broadcast/
 .env
 data/
 *.sqlite*
+.dev.vars
+.wrangler/
+dist/
