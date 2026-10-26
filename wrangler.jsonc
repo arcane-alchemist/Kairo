@@ -1,13 +1,7 @@
 {
   "name": "kairo",
   "workers_dev": true,
-  "routes": [
-    {
-      "pattern": "poap.ntlap.in",
-      "zone_name": "ntlap.in",
-      "custom_domain": true
-    }
-  ],
+  "routes": [],
   "main": "serverless/worker.js",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": [

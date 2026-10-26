@@ -1,8 +1,20 @@
-# Kairo Home mobile app
+# Kairo Android
 
-Standalone Expo / React Native Android and iOS app. All mobile source, dependencies, tests, configuration and build output are in this folder. The existing Cloudflare Worker supplies the real backend; no private keys are included in the mobile bundle.
+The Android app renders the production [Kairo website](https://kairo-site-7fb.pages.dev) inside a native Expo WebView. It shares the website’s actual lavender, ink, cream and lime palette, typography, animated artwork, responsive layouts, and backend. There is no separate imitation interface or simulated data source. Website deployments update the interface without requiring another APK.
 
-## Run on your phone
+## Real workflows
+
+Explore events, register and retrieve tickets, view confirmed collections, authenticate a wallet, and use the organiser studio and administrator tools through the same production APIs. Organisers can upload supported images/videos or generate SVG artwork from an event description, save a draft and submit it for review. Generated SVG artwork is procedural artwork, not a claim of AI image generation. Issuer permissions and staff attendance checks remain enforced by the backend and contract.
+
+Wallet connection starts only after the user taps Connect. The official MetaMask Connect SDK relays requests to MetaMask Mobile, where the user approves accounts, signatures and transactions. Install MetaMask Mobile and use Sepolia. Private keys stay in MetaMask; app credentials and issuer secrets are never embedded. Browser extensions continue using the website’s injected MetaMask flow.
+
+The native shell handles Android safe areas, portrait/landscape resizing, keyboard resizing, back navigation, trusted deep links, and QR PNG sharing through Android’s share sheet. Media uploads use Android’s file chooser. Camera access is requested by Android when a camera workflow needs it. Storage-library, microphone and overlay permissions are blocked. External HTTPS links open in the system browser. Native messages validate their origin, action, file size and filename.
+
+An internet connection is required. A failed page load displays a themed retry screen. The app does not simulate a backend response when disconnected. Backend: https://kairo.aakritigupta7227.workers.dev. The fixed website origin is in `src/shell.ts`; the website proxies API requests to the Worker using its deployed configuration.
+
+## Development
+
+Use Node 24 or newer:
 
 ```sh
 cd app
@@ -10,44 +22,32 @@ npm ci
 npm start
 ```
 
-Scan the development QR with a compatible Expo Go version. Both phone and laptop must be on the same network. Alternatively use `npm run android` with an Android emulator, or `npm run ios` with an installed iOS simulator. Native camera and wallet flows require a physical device or native emulator; the Android JS export is not an APK.
-
-## Build an installable Android APK
-
-```sh
-npx eas-cli login
-npx eas-cli build --platform android --profile preview
-```
-
-EAS requires your Expo account and may have build limits. `production` builds an Android App Bundle for later Play Store submission. No app-store submission or EAS build has been performed automatically.
-
-## Connected features
-
-- Address-only onboarding; no account custody or private key entry.
-- Real confirmed Kairo collections, original uploaded artwork, drop and NFT IDs, Sepolia transaction links.
-- Explore and search drops; browse collectors; device-local favorites and following.
-- Drop detail with event, RSVP and minting dates; real RSVP submission and explicit permanent-NFT consent.
-- Native camera scans wallet, Drop ID, and ticket QR codes. Input validation prevents arbitrary QR links from opening.
-- Dispenser imports a real Drop ID and shares its registration QR. QR possession does not grant mint permission.
-- Native encrypted ticket storage, live polling, real mint status notifications when the app refreshes and permission is enabled.
-- Settings: address copy/QR, nickname, account change/logout, FAQ, Sepolia network.
-- Capsule moments with captions and optional photos, explicitly saved on-device; share captions with the OS share sheet.
-- Organizer wallet authentication/check-in opens the working site in MetaMask's browser. Address-only viewing never grants organizer authority.
-
-## Boundaries
-
-This uses a POAP-inspired visual layout with Kairo branding. It is not affiliated with POAP. There is no mock event list or simulated mint. The backend collection endpoint covers confirmed app registrations, not a full chain index. Favorites, follows, nickname and moments are local and do not sync between phones. Email custody, ENS resolution, remote/background push delivery, public social tagging, NFC/location/secret-word claims and other networks are not implemented; the app does not display fake counters or pretend they work. Real attendance must still be checked by staff.
-
-The API defaults to `https://kairo.aakritigupta7227.workers.dev`; change `EXPO_PUBLIC_API_URL` only to a trusted HTTPS Kairo backend. Never put secrets in EXPO_PUBLIC variables. Web preview is not the target: native HTTP can set the API's required Origin header; browser cross-origin requests cannot. Use the separately deployed website for browser usage.
-
-## Verification
+Use a compatible Expo development client for native testing; `npm run android` requires a local Android SDK and emulator/device. The generated `android/` directory is ignored and must not be edited manually. Configuration belongs in `app.json` and `plugins/`.
 
 ```sh
 npm test
 npm run check
+npm run lint
+npm run typecheck
 npm run export
+npx expo-doctor
 ```
 
-These validate QR parsing, real-data search/status behavior, Expo module versions, and Android bundle compilation. They do not substitute for on-device camera, MetaMask, image-picker, notification, or store-release QA.
+`export` compiles the Android JavaScript bundle. It does not produce an installable APK or verify native hardware integrations.
 
-Dependency audit: Expo SDK 57's transitive toolchain currently reports 22 advisories (15 high, 7 moderate), including Metro glob parsing, node-forge, and xcode's uuid dependency. Compatible npm audit fixes were applied; npm's forced recommendation downgrades Expo incompatibly and was not applied. Review updated SDK/toolchain patches before store release.
+## Signed APK and Play Store bundle
+
+```sh
+npx eas-cli@latest login
+npm run build:apk
+```
+
+The preview EAS profile produces a signed, installable APK. On the first build, link/create the Expo project and generate its Android signing credentials in your account. `npm run build:aab` produces a production Android App Bundle; store submission is separate. No Expo project ID, account credential or signing key is fabricated in this repository.
+
+Build status: Android export, unit tests, lint and typecheck can run locally. An installable APK has not yet been built because EAS is signed out and this workstation has no Android SDK. Physical-device verification of MetaMask approval/return, camera, file/video upload, QR sharing, keyboard and rotation remains required before release.
+
+## Release checks
+
+Verify denied and approved wallet permissions, account changes, signature rejection, real organiser upload/generation and review, ticket registration/check-in/mint/collection, QR sharing, external links and Android back. Test small phones, landscape, tablets, system font scaling, cutouts and keyboard-visible forms on real Android hardware. A real mint requires an authorised issuer and a real transaction; unit tests do not establish that it happened.
+
+Compatible dependency audit fixes were applied. Remaining upstream advisories include Expo CLI signing/parser tooling, Expo Router transitive URL parsing, and the web wallet SDK’s UUID dependency. Do not force an incompatible Expo downgrade to suppress the audit. Recheck patched upstream releases before store publication.

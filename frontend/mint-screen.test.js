@@ -24,7 +24,7 @@ test('Connect authenticates the wallet without starting a mint; Mint submits the
   const nodes = Object.fromEntries(['claim-mint', 'claim-connect', 'claim-wallet', 'claim-consent','claim-consent-row'].map(id => [id, { checked: true }]));
   const main = { innerHTML: '', querySelector: selector => nodes[selector.slice(1)] };
   let submissions = 0, shown = 0;
-  const context = vm.createContext({ main, modalBody: {}, session: null, esc: String, artwork: () => '<img src="hacktober.png">', window: { ethereum: {} },
+  const context = vm.createContext({ main, modalBody: {}, session: null, connectedWallet: '', esc: String, artwork: () => '<img src="hacktober.png">', window: { ethereum: {} },
     busy: async (_, action) => action(), connect: async () => { context.session = { wallet: '0xattendee' }; }, signerOnSepolia: async () => {},
     api: async () => context.session, toast() {},
     post: async path => { assert.equal(path, '/events/2/claim'); submissions++; return { ticket: 'ticket' }; },
@@ -45,9 +45,9 @@ test('Connect authenticates the wallet without starting a mint; Mint submits the
   assert.equal(shown, 1);
 });
 
-test('a restored authenticated wallet shows Mint after refresh without requesting another signature', () => {
+test('an explicitly connected authenticated wallet shows Mint without another signature', () => {
   const nodes={};const main={innerHTML:'',querySelector: selector => nodes[selector] ||= {}};
-  const context=vm.createContext({main,session:{wallet:'0xattendee'},esc:String,window:{ethereum:{}},busy(){}});
+  const context=vm.createContext({main,connectedWallet:'0xattendee',session:{wallet:'0xattendee'},esc:String,window:{ethereum:{}},busy(){}});
   vm.runInContext(source.slice(source.indexOf('function claimForm('),source.indexOf('\nfunction rsvpForm('))+"\nclaimForm({id:2,title:'Hacktober'},true)",context);
   assert.match(main.innerHTML,/Connected: 0xattendee/);
   assert.doesNotMatch(main.innerHTML,/id="claim-mint"[^>]*(hidden|disabled)/);
@@ -56,8 +56,9 @@ test('a restored authenticated wallet shows Mint after refresh without requestin
 test('wallet connects and switches to Sepolia before requesting the sign-in signature', async () => {
   const steps=[];const signer={getAddress:async()=> '0xwallet',signMessage:async()=>{steps.push('sign');return 'signature';}};
   class Provider {async send(){steps.push('accounts');}async getSigner(){return signer;}}
-  const context=vm.createContext({BrowserProvider:Provider,window:{ethereum:{request:async({method})=>{steps.push(method);return method==='eth_chainId'?'0x1':method==='eth_accounts'?['0xwallet']:null;}}},
-    post:async(path)=>{steps.push(path);return {message:'Sign in'};},api:async()=>({wallet:'wallet'}),document:{querySelector:()=>({})},short:String,toast(){},session:null});
+  const injected={request:async({method})=>{steps.push(method);return method==='eth_chainId'?'0x1':method==='eth_accounts'?['0xwallet']:null;}};
+  const context=vm.createContext({BrowserProvider:Provider,connectedWallet:'0xwallet',walletRevision:0,logoutRequest:Promise.resolve(),walletClient:{provider:injected},
+    post:async(path)=>{steps.push(path);return {message:'Sign in'};},api:async()=>({wallet:'0xwallet'}),document:{querySelector:()=>({})},short:String,toast(){},session:null});
   const start=source.indexOf('async function connect()');
   await vm.runInContext(source.slice(start,source.indexOf("\ndocument.querySelector('#wallet').onclick",start))+'\nconnect()',context);
   assert(steps.indexOf('wallet_switchEthereumChain')<steps.indexOf('sign'));
@@ -77,11 +78,45 @@ test('a late mint response cannot replace a newer ticket screen', async () => {
 
 test('read-only wallet connection requests accounts without signatures, minting or automatic network changes', async () => {
   const methods = [];
-  const context = vm.createContext({ connectedWallet: '', getAddress: value => value, short: value => value,
+  const context = vm.createContext({ connectedWallet: '', session:null, walletRevision:0, walletClient:{connect:async()=>{methods.push('MetaMask permission flow');return '0xwallet';}}, getAddress: value => value, short: value => value,
     window: { ethereum: { request: async ({ method }) => { methods.push(method); return ['0xwallet']; } } },
     document: { querySelector: () => ({}) }, updateNetwork: async () => {} });
   const start = source.indexOf('async function connectWallet()');
   await vm.runInContext(source.slice(start, source.indexOf('\nasync function updateNetwork()', start)) + '\nconnectWallet()', context);
-  assert.deepEqual(methods, ['eth_requestAccounts']);
+  assert.deepEqual(methods, ['MetaMask permission flow']);
   assert.equal(context.connectedWallet, '0xwallet');
+});
+
+
+test('a late account approval cannot replace a connection invalidated by a wallet change',async()=>{
+  const context=vm.createContext({connectedWallet:'',session:null,walletRevision:0,document:{querySelector:()=>({})},getAddress:value=>value,short:String,updateNetwork:async()=>{}});
+  context.walletClient={connect:async()=>{context.walletRevision++;return '0xwallet';},disconnect(){}};
+  const start=source.indexOf('async function connectWallet()');
+  await assert.rejects(vm.runInContext(source.slice(start,source.indexOf('\nasync function updateNetwork()',start))+'\nconnectWallet()',context),/Wallet changed/);
+  assert.equal(context.connectedWallet,'');
+});
+
+test('updateNetwork hides Sepolia connected and header places wallet on the top right side', async () => {
+  const node = { hidden: false, textContent: '' };
+  const context = vm.createContext({
+    connectedWallet: '0x9405000000000000000000000000000000000aE0',
+    activeChain: '',
+    walletClient: { provider: { request: async () => '0xaa36a7' } },
+    document: { querySelector: sel => sel === '#wallet-network' ? node : null }
+  });
+  const start = source.indexOf('async function updateNetwork()');
+  const end = source.indexOf('\ndocument.querySelector(\'#wallet-network\').onclick', start);
+  await vm.runInContext(source.slice(start, end) + '\nupdateNetwork()', context);
+  assert.equal(node.hidden, true);
+
+  context.walletClient.provider.request = async () => '0x1';
+  await vm.runInContext('updateNetwork()', context);
+  assert.equal(node.hidden, false);
+  assert.equal(node.textContent, 'Switch to Sepolia');
+
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const walletPos = html.indexOf('id="wallet"');
+  const installPos = html.indexOf('id="install-app"');
+  const networkPos = html.indexOf('id="wallet-network"');
+  assert.ok(walletPos > installPos && walletPos > networkPos, 'wallet address button is on the top right side');
 });

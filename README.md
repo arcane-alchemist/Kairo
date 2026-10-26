@@ -54,7 +54,7 @@ For new event artwork, upload PNG/JPEG up to 1 MB or generate a badge. R2 keys i
 
 ## Cloudflare deployment
 
-The website is deployed on Cloudflare Pages at https://kairo-site-7fb.pages.dev. Pages forwards same-origin API requests to the existing Worker at https://kairo.aakritigupta7227.workers.dev, with the remote `kairo` D1 database, all three migrations applied, the `kairo-media` R2 bucket, and all three runtime secrets. The homepage and D1-backed event API passed live checks. The requested custom domain `poap.ntlap.in` is configured in Wrangler, but attachment is pending because Cloudflare reports that the `ntlap.in` zone does not exist in the authenticated account. Once the zone is active in the deployment account, rerun `npm run deploy:app` to attach the custom domain. Run `npm run preflight:app` to verify the contract, runtime secrets and relayer funding before deployment.
+The website is deployed on Cloudflare Pages at https://kairo-site-7fb.pages.dev. Pages forwards same-origin API requests to the existing Worker at https://kairo.aakritigupta7227.workers.dev, with the remote `kairo` D1 database, all seven migrations applied, the `kairo-media` R2 bucket, and all three runtime secrets. The homepage and D1-backed event API passed live checks. The requested custom domain `poap.ntlap.in` remains deferred because Cloudflare reports that the `ntlap.in` zone does not exist in the authenticated account. Wrangler deploys to the working `workers.dev` address with no custom routes. Once the zone is active, add its custom-domain route to `wrangler.jsonc` before deploying. Run `npm run preflight:app` to verify the contract, runtime secrets and relayer funding before deployment.
 
 ```sh
 npx wrangler login
@@ -122,7 +122,7 @@ Run `npm run deploy:pages` to build and publish the website. The deploy script s
 
 Capacity 0 means unlimited: the creator uses the uint64 maximum on-chain, and D1 stores 0 as the unlimited sentinel. Finite capacity defaults to 50. Publishing creates a Drop ID; the drop page provides a downloadable QR linking to the real deployed drop. Staff attendance verification remains required. A QR cannot bypass it.
 
-The standalone native mobile project, setup, tests, and APK build instructions are in [app/README.md](app/README.md). All mobile source and dependencies remain inside app/. The Android JS bundle compiles; a signed APK and device QA are not yet complete.
+The Android project uses the same live website inside a native Expo WebView, preserving the theme and backend workflows. Native code handles safe areas, Android back navigation, MetaMask Mobile handoff, and QR file sharing. Setup, verification, and APK build instructions are in [app/README.md](app/README.md). A signed APK and physical-device QA require an authenticated Expo build account.
 
 
 ### Hacktober QR claims
@@ -149,3 +149,53 @@ npm run deploy:pages
 Campus, eligibility and available roles are organizer-provided listing information. A registration records a requested role; staff must verify it at check-in. The existing contract does not encode roles, so they are staff records rather than on-chain role attestations. QR claims are labeled Collector and excluded from verified-participation metrics. Organization names are not independently verified. Cancellation requires a signed-in matching wallet and atomically removes only an unverified RSVP without a mint job.
 
 The PWA caches its shell, public discovery/configuration, and up to 60 content-addressed artwork/metadata resources. It excludes authenticated APIs, ticket secrets, staff data and wallet collections. Offline discovery is labeled as previously loaded content; verification and writes require connectivity. System typography and flat SVG badges work without external fonts or WebGL. Push notifications are not implemented.
+
+## Kairos-ui integration and generated badges
+
+The served entry point is `frontend/app.js`. The Kairos-ui visual shell now routes
+Gallery, Collection, Collectors, Build with POAP, and Manage attendance to the
+existing Worker/D1/R2/Sepolia flows. Empty databases stay empty; API failures show
+an error and retry. Static artwork in the hero and memory press is decorative.
+The standalone `frontend/main.js` and `frontend/platform.js` design reference is
+not bundled into the connected app.
+
+`POST /api/artwork` accepts `{ name, description, image? }` using the existing
+admin session. With no image, the Worker generates an SVG badge from description
+keywords (technology, music, art, sports, or community), with a stable palette and
+pattern derived from the event text. This is a procedural generator; it does not
+call a paid AI image service. Custom PNG/JPEG uploads remain supported. Both paths
+store content-addressed artwork and frozen metadata in R2 and return `{ image,
+uri }`. The creator can preview a generated badge or generate automatically during
+publication. Creating artwork alone does not mint: the admin must still confirm
+event creation, followed by eligible attendee issuance through the real contract.
+
+Run `npm run db:local`, `npm run dev`, `npm test`, and `npm run build` locally.
+Wallet authentication, generation, publication, and minting require the runtime
+secrets listed above; this checkout does not include `.dev.vars`. Deploy the Worker
+and frontend together so the optional-image API and UI are the same version.
+
+## Organizer studio, MetaMask consent, and video collectibles
+
+The organiser workspace is at `/#issuer/studio`. Any signed-in wallet can generate
+artwork, upload PNG/JPEG (2 MB) or MP4/WebM (10 MB), save its own event drafts to D1,
+and submit them for publication. The college admin sees submitted events in the
+same studio and confirms their on-chain creation; contract permissions are
+unchanged. Private draft APIs never return another organiser's submissions to a
+non-admin. Published drafts cannot be edited. Video metadata uses `animation_url`
+and retains a generated SVG poster; collection and event details provide playback
+controls. These are hosted assets, so maintaining R2 and its URLs is still required.
+
+Apply `serverless/migrations/0007_organizer_studio.sql` before deploying this
+version. The migration adds draft storage and an optional event animation URL.
+
+Wallet connection uses MetaMask EIP-6963 discovery, with a MetaMask-only injected
+provider fallback. Startup never restores an account automatically. Each explicit
+connection requests `wallet_requestPermissions` before `eth_requestAccounts`;
+rejection leaves the app disconnected. Sign-in is separate. Account/network
+changes clear the selected connection and server session. Switching accounts is
+available in the wallet menu. Disconnecting from Kairo clears its app session;
+MetaMask's own site-permission controls remain available inside the extension.
+
+About and Documentation now describe the actual organiser/collector workflows.
+Navigation groups are exclusive on desktop and mobile. Animated doodles respect
+reduced-motion preferences and the global Pause motion control.

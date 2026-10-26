@@ -1,4 +1,4 @@
-const CACHE = 'kairo-student-v3';
+const CACHE = 'kairo-android-v6';
 const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
 const PUBLIC = ['/api/events', '/api/config'];
 self.addEventListener('install', event => {
@@ -10,7 +10,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request, url = new URL(request.url);
   // Cache only the app shell, explicitly public discovery, and content-addressed artwork. Never wallet lookups, sessions, tickets or staff APIs.
-  const safe = !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|json)$/.test(url.pathname));
+  const safe = !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|json)$/.test(url.pathname));
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (!safe) {
     if (request.mode === 'navigate' && !url.pathname.startsWith('/api/')) event.respondWith(fetch(request).catch(() => caches.match('/offline.html')));

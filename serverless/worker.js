@@ -1,5 +1,6 @@
 import { getAddress, verifyMessage, ZeroAddress } from 'ethers';
 import { z } from 'zod';
+import { generateBadge } from './artwork.js';
 import { connectChain } from './chain.js';
 import { MintCoordinator } from './mint.js';
 export { MintCoordinator };
@@ -15,6 +16,7 @@ const eventDetails = z.object({ claimMode: z.enum(['attendance','qr']).default('
   campus: z.string().trim().max(100).default(''), eligibility: z.string().trim().max(500).default('Open to campus participants with a college ID'),
   roles: z.array(z.string().trim().min(1).max(40)).min(1).max(8).default(['Attendee']), venue: z.string().trim().min(2).max(150),
   eventStartsAt: z.number().int().positive().optional(), eventEndsAt: z.number().int().positive().optional(),
+  draftId: z.string().uuid().optional(), animationUrl: z.string().url().max(300).optional(),
   image: z.string().max(300), uri: z.string().max(300), rsvpDeadline: z.number().int().positive() });
 const json = (data, status = 200) => Response.json(data, { status });
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -60,7 +62,7 @@ async function limit(request, env, route) {
 function publicEvent(row) {
   return { id: row.id, title: row.title, description: row.description, club: row.club, category: row.category,
     campus: row.campus || '', eligibility: row.eligibility, roles: JSON.parse(row.roles || '["Attendee"]'),
-    venue: row.venue, image: row.image, uri: row.uri, startsAt: row.event_starts_at ?? row.starts_at, endsAt: row.event_ends_at ?? row.ends_at,
+    venue: row.venue, image: row.image, uri: row.uri, animationUrl: row.animation_url || null, startsAt: row.event_starts_at ?? row.starts_at, endsAt: row.event_ends_at ?? row.ends_at,
     mintStartsAt: row.starts_at, mintEndsAt: row.ends_at, dropId: row.id,
     claimMode: row.claim_mode || 'attendance', rsvpDeadline: row.rsvp_deadline, cap: row.cap, organizer: row.organizer };
 }
@@ -71,7 +73,7 @@ export function createHandler(chainFactory = connectChain) {
     try {
       if (path.startsWith('/media/')) {
         const key = path.slice(7);
-        if (!/^(art|metadata)\/[a-f0-9]{64}\.(png|jpg|json)$/.test(key)) throw new HttpError(404, 'Not found');
+        if (!/^(art|video|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|mp4|webm|json)$/.test(key)) throw new HttpError(404, 'Not found');
         const object = await env.MEDIA.get(key);
         if (!object) throw new HttpError(404, 'Not found');
         return new Response(object.body, { headers: { 'content-type': object.httpMetadata.contentType,
@@ -126,24 +128,81 @@ export function createHandler(chainFactory = connectChain) {
         return new Response('{}', { headers: { 'content-type': 'application/json', 'set-cookie': 'kairo_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' } });
       }
       if (path === '/api/artwork' && request.method === 'POST') {
-        const wallet = await user(request, env); const chain = await chainFactory(env);
-        if (!await chain.admin(wallet)) throw new HttpError(403, 'College admin approval is required to create an event');
-        const input = z.object({ name: z.string().trim().min(3).max(100), description: z.string().max(1000),
-          image: z.string().max(2800000) }).parse(await body(request, 3000000));
-        const match = input.image.match(/^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/);
-        if (!match) throw new HttpError(400, 'Upload a PNG or JPEG');
-        const bytes = Uint8Array.from(atob(match[2]), c => c.charCodeAt(0));
-        if (bytes.length > 2 * 1024 * 1024 || bytes.length < 8 ||
-          (match[1] === 'png' ? ![137,80,78,71,13,10,26,10].every((v,i) => bytes[i] === v) : !(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255))) {
-          throw new HttpError(400, 'Invalid image or image exceeds 2 MB');
+        await user(request, env);
+        const input = z.object({ name: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(1000),
+          image: z.string().max(2800000).optional(), video: z.string().max(14000000).optional() }).parse(await body(request, 17000000));
+        let bytes, extension, contentType;
+        if (!input.image) {
+          const generated = await generateBadge(input.name, input.description);
+          bytes = new TextEncoder().encode(generated.svg); extension = 'svg'; contentType = 'image/svg+xml';
+        } else {
+          const match = input.image.match(/^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/);
+          if (!match) throw new HttpError(400, 'Upload a PNG or JPEG');
+          try { bytes = Uint8Array.from(atob(match[2]), c => c.charCodeAt(0)); } catch { throw new HttpError(400, 'Invalid image encoding'); }
+          if (bytes.length > 2 * 1024 * 1024 || bytes.length < 8 ||
+            (match[1] === 'png' ? ![137,80,78,71,13,10,26,10].every((v,i) => bytes[i] === v) : !(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255))) {
+            throw new HttpError(400, 'Invalid image or image exceeds 2 MB');
+          }
+          extension = match[1] === 'png' ? 'png' : 'jpg'; contentType = `image/${match[1]}`;
         }
-        const hash = await digest(input.image);
-        const image = `${url.origin}/media/art/${hash}.${match[1] === 'png' ? 'png' : 'jpg'}`;
-        await env.MEDIA.put(image.split('/media/')[1], bytes, { httpMetadata: { contentType: `image/${match[1]}` } });
-        const metadata = JSON.stringify({ name: input.name, description: input.description, image });
+        const hash = await digest(input.image || new TextDecoder().decode(bytes));
+        const image = `${url.origin}/media/art/${hash}.${extension}`;
+        await env.MEDIA.put(image.split('/media/')[1], bytes, { httpMetadata: { contentType } });
+        let animationUrl;
+        if (input.video) {
+          const match = input.video.match(/^data:video\/(mp4|webm);base64,([A-Za-z0-9+/=]+)$/);
+          if (!match) throw new HttpError(400, 'Upload an MP4 or WebM video');
+          let videoBytes;
+          try { videoBytes = Uint8Array.from(atob(match[2]), c => c.charCodeAt(0)); } catch { throw new HttpError(400, 'Invalid video encoding'); }
+          const valid = match[1] === 'mp4' ? [102,116,121,112].every((v,i) => videoBytes[i+4] === v) : [26,69,223,163].every((v,i) => videoBytes[i] === v);
+          if (videoBytes.length < 16 || videoBytes.length > 10 * 1024 * 1024 || !valid) throw new HttpError(400, 'Invalid video or video exceeds 10 MB');
+          const videoKey = `video/${await digest(input.video)}.${match[1]}`;
+          await env.MEDIA.put(videoKey, videoBytes, { httpMetadata: {contentType: `video/${match[1]}`} });
+          animationUrl = `${url.origin}/media/${videoKey}`;
+        }
+        const metadata = JSON.stringify({ name: input.name, description: input.description, image, ...(animationUrl ? {animation_url: animationUrl} : {}) });
         const key = `metadata/${await digest(metadata)}.json`;
         await env.MEDIA.put(key, metadata, { httpMetadata: { contentType: 'application/json' } });
-        return json({ image, uri: `${url.origin}/media/${key}` });
+        return json({ image, uri: `${url.origin}/media/${key}`, ...(animationUrl ? {animationUrl} : {}) });
+      }
+      if (path === '/api/organizer/events' && request.method === 'GET') {
+        const wallet = await user(request, env);
+        const {results} = await env.DB.prepare('SELECT * FROM organizer_drafts WHERE wallet=? ORDER BY updated_at DESC LIMIT 100').bind(wallet).all();
+        return json(results.map(row => ({...row, details: JSON.parse(row.details)})));
+      }
+      if (path === '/api/organizer/review' && request.method === 'GET') {
+        const wallet = await user(request, env); const chain = await chainFactory(env);
+        if (!await chain.admin(wallet)) throw new HttpError(403, 'Only the college admin may review events');
+        const {results} = await env.DB.prepare("SELECT * FROM organizer_drafts WHERE status='submitted' ORDER BY updated_at LIMIT 100").all();
+        return json(results.map(row => ({...row, details: JSON.parse(row.details)})));
+      }
+      if (path === '/api/organizer/events' && request.method === 'POST') {
+        const wallet = await user(request, env);
+        const input = eventDetails.omit({id: true, draftId: true}).extend({
+          id: z.string().uuid().optional(), cap: z.number().int().min(0).max(10000),
+          mintStartsAt: z.number().int().positive(), mintEndsAt: z.number().int().positive(),
+          eventStartsAt: z.number().int().positive(), eventEndsAt: z.number().int().positive(),
+          submit: z.boolean().default(false)
+        }).parse(await body(request));
+        if (input.eventStartsAt >= input.eventEndsAt || input.mintStartsAt < input.eventStartsAt || input.mintStartsAt >= input.mintEndsAt || input.mintEndsAt < input.eventEndsAt || input.rsvpDeadline > input.eventStartsAt) throw new HttpError(400, 'Check the event, registration and minting schedule');
+        const key = input.uri.startsWith(`${url.origin}/media/metadata/`) ? input.uri.split('/media/')[1] : '';
+        if (!/^metadata\/[a-f0-9]{64}\.json$/.test(key)) throw new HttpError(400, 'Save collectible artwork first');
+        const object = await env.MEDIA.get(key); const metadata = object && await object.json();
+        if (!metadata || metadata.name !== input.title || metadata.description !== input.description || metadata.image !== input.image || metadata.animation_url !== input.animationUrl) throw new HttpError(409, 'Collectible metadata does not match the event');
+        const id = input.id || crypto.randomUUID();
+        const previous = await env.DB.prepare('SELECT wallet,status FROM organizer_drafts WHERE id=?').bind(id).first();
+        if (input.id && (!previous || previous.wallet !== wallet)) throw new HttpError(403, 'This event draft belongs to another organizer');
+        if (previous?.status === 'published') throw new HttpError(409, 'Published events cannot be edited');
+        if (!previous) {
+          const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM organizer_drafts WHERE wallet=?').bind(wallet).first();
+          if (count.count >= 100) throw new HttpError(409, 'Organizer workspace limit reached');
+        }
+        const {id: ignored, submit, ...details} = input;
+        const status = submit ? 'submitted' : 'draft';
+        const saved = await env.DB.prepare(`INSERT INTO organizer_drafts(id,wallet,details,status,created_at,updated_at) VALUES(?,?,?,?,?,?)
+          ON CONFLICT(id) DO UPDATE SET details=excluded.details,status=excluded.status,updated_at=excluded.updated_at WHERE organizer_drafts.wallet=excluded.wallet AND organizer_drafts.status!='published'`).bind(id,wallet,JSON.stringify({...details,organizer:wallet}),status,now(),now()).run();
+        if (saved.meta.changes !== 1) throw new HttpError(409, 'This event was already published');
+        return json({id,status}, previous ? 200 : 201);
       }
       if (path === '/api/events' && request.method === 'POST') {
         const wallet = await user(request, env); const chain = await chainFactory(env);
@@ -154,7 +213,7 @@ export function createHandler(chainFactory = connectChain) {
         const stored = await env.MEDIA.get(metadataKey);
         if (!stored) throw new HttpError(409, 'Metadata is missing');
         const metadata = await stored.json();
-        if (metadata.name !== input.title || metadata.description !== input.description || metadata.image !== input.image) throw new HttpError(409, 'Artwork differs from the frozen collectible');
+        if (metadata.name !== input.title || metadata.description !== input.description || metadata.image !== input.image || metadata.animation_url !== input.animationUrl) throw new HttpError(409, 'Artwork differs from the frozen collectible');
         const published = await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(input.id).first();
         if (published) {
           if (published.uri !== input.uri || published.title !== input.title || published.description !== input.description || published.club !== input.club || published.category !== input.category || published.venue !== input.venue || published.rsvp_deadline !== input.rsvpDeadline || published.claim_mode !== input.claimMode || published.campus !== input.campus || published.eligibility !== input.eligibility || published.roles !== JSON.stringify(input.roles)) throw new HttpError(409, 'This event is already published with different details');
@@ -165,9 +224,14 @@ export function createHandler(chainFactory = connectChain) {
         const eventEnd = input.eventEndsAt ?? Number(event.endsAt);
         if (eventStart >= eventEnd || eventStart > Number(event.startsAt) || eventEnd > Number(event.endsAt) || (input.eventStartsAt && input.rsvpDeadline > eventStart)) throw new HttpError(400, 'Invalid event and minting schedule');
         const organizer = await chain.contract.eventAdmin(input.id);
-        await env.DB.prepare(`INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(input.id, input.title,
+        if (input.draftId) {
+          const draft = await env.DB.prepare('SELECT * FROM organizer_drafts WHERE id=?').bind(input.draftId).first();
+          if (!draft || draft.status !== 'submitted' || draft.wallet !== organizer || JSON.parse(draft.details).uri !== input.uri) throw new HttpError(409, 'Organizer submission does not match the on-chain event');
+        }
+        const listing = env.DB.prepare(`INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles,animation_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(input.id, input.title,
           input.description, input.club, input.category, input.venue, input.image, input.uri, Number(event.startsAt),
-          Number(event.endsAt), input.rsvpDeadline, event.cap === 18446744073709551615n ? 0 : Number(event.cap), organizer, now(), eventStart, eventEnd, input.claimMode, input.campus, input.eligibility, JSON.stringify(input.roles)).run();
+          Number(event.endsAt), input.rsvpDeadline, event.cap === 18446744073709551615n ? 0 : Number(event.cap), organizer, now(), eventStart, eventEnd, input.claimMode, input.campus, input.eligibility, JSON.stringify(input.roles), input.animationUrl || null);
+        await env.DB.batch([listing,...(input.draftId ? [env.DB.prepare("UPDATE organizer_drafts SET status='published',event_id=?,updated_at=? WHERE id=?").bind(input.id,now(),input.draftId)] : [])]);
         return json({ id: input.id }, 201);
       }
       const claim = path.match(/^\/api\/events\/(\d+)\/claim$/);
@@ -220,7 +284,7 @@ export function createHandler(chainFactory = connectChain) {
       if (attendees && request.method === 'GET') {
         const id = eventId.parse(attendees[1]); const wallet = await user(request, env); const chain = await chainFactory(env);
         if (!await chain.staff(id, wallet)) throw new HttpError(403, 'You are not staff for this event');
-        const { results } = await env.DB.prepare(`SELECT r.id,r.wallet,r.participation_role,r.consent_at,r.checked_in_at,r.checked_in_by,j.status,j.tx_hash,j.error
+        const { results } = await env.DB.prepare(`SELECT r.id,r.wallet,r.participation_role,r.consent_at,r.checked_in_at,r.checked_in_by,r.claimed_at,j.status,j.tx_hash,j.token_id,j.error
           FROM registrations r LEFT JOIN jobs j ON j.id=r.id WHERE r.event_id=? ORDER BY r.consent_at DESC LIMIT 1000`).bind(id).all();
         return json(results);
       }
@@ -279,7 +343,7 @@ export function createHandler(chainFactory = connectChain) {
           try {
             const object = key ? await env.MEDIA.get(key) : null;
             if (object) {
-              const parsed = z.object({ name: z.string().max(100), description: z.string().max(1000), image: z.string().max(300) }).safeParse(await object.json());
+              const parsed = z.object({ name: z.string().max(100), description: z.string().max(1000), image: z.string().max(300), animation_url: z.string().url().max(300).optional() }).safeParse(await object.json());
               if (parsed.success) metadata = parsed.data;
             }
           } catch { /* Ownership remains useful when the metadata bucket is temporarily unavailable. */ }
@@ -290,6 +354,7 @@ export function createHandler(chainFactory = connectChain) {
           return { ...(matches ? publicEvent(listing) : { id: token.id, startsAt: null, endsAt: null, club: 'Unlisted organization', category: 'Other', venue: 'Not listed' }),
             ...token, title: metadata?.name || (matches ? listing.title : `Kairo collectible #${token.tokenId}`),
             description: metadata?.description || (matches ? listing.description : ''), image: metadata?.image || (matches ? listing.image : ''),
+            animationUrl: metadata?.animation_url || null,
             role: recorded?.checked_in_at ? recorded.participation_role : recorded?.claimed_at ? 'Collector' : 'Unrecorded',
             attendanceVerified: Boolean(recorded?.checked_in_at), issuedAt: recorded?.tx_hash ? recorded.updated_at : null,
             transactionHash: recorded?.tx_hash || null, history, ownershipVerified: true,

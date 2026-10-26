@@ -14,6 +14,7 @@ function fixture() {
   sqlite.exec(readFileSync('serverless/migrations/0004_qr_claims.sql', 'utf8'));
   sqlite.exec(readFileSync('serverless/migrations/0005_linked_qr_claims.sql', 'utf8'));
   sqlite.exec(readFileSync('serverless/migrations/0006_student_experience.sql', 'utf8'));
+  sqlite.exec(readFileSync('serverless/migrations/0007_organizer_studio.sql', 'utf8'));
   const DB = {
     prepare(sql) {
       let values = [];
@@ -134,14 +135,14 @@ test('unsigned failures leave the queue after ten attempts, signed failures reta
   assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status, 'submitted');
 });
 
-test('artwork publishing requires admin, matches chain metadata and resumes idempotently', async t => {
+test('signed organizers can upload artwork; publishing requires admin, matches chain metadata and resumes idempotently', async t => {
   const f = fixture(); t.after(() => f.sqlite.close());
   const objects = new Map();
   f.env.MEDIA = { async put(key, value) { objects.set(key, value); },
     async get(key) { const value = objects.get(key); return value === undefined ? null : { async json() { return JSON.parse(value); } }; } };
   const art = { name: 'Campus meetup', description: 'Meet the campus community',
     image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXuoAAAAASUVORK5CYII=' };
-  assert.equal((await f.request('/artwork', art, await f.login(f.outsider))).status, 403);
+  assert.equal((await f.request('/artwork', art, await f.login(f.outsider))).status, 200);
   const cookie = await f.login(f.admin);
   assert.equal((await f.request('/artwork', { ...art, image: 'data:image/svg+xml;base64,AAAA' }, cookie)).status, 400);
   const media = await (await f.request('/artwork', art, cookie)).json();
@@ -213,7 +214,7 @@ test('QR claims require wallet authentication and consent, honor cap/window, and
 
 test('linked QR drops reject a second claim across either drop and preserve retries', async t => {
   const f=fixture();t.after(()=>f.sqlite.close());
-  f.sqlite.exec("UPDATE events SET claim_mode='qr' WHERE id=1; INSERT INTO events SELECT 2,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles FROM events WHERE id=1");
+  f.sqlite.exec("UPDATE events SET claim_mode='qr' WHERE id=1; INSERT INTO events SELECT 2,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles,animation_url FROM events WHERE id=1");
   const firstWallet=await f.login(f.outsider);
   assert.equal((await f.request('/events/1/claim',{permanentConsent:true},firstWallet)).status,202);
   const blocked=await f.request('/events/2/claim',{permanentConsent:true},firstWallet);
@@ -278,4 +279,81 @@ test('wallet collection includes on-chain tokens missing from the application da
   assert.equal(body.items[0].role, 'Unrecorded'); assert.equal(body.items[0].attendanceVerified, false);
   assert.equal(body.items[0].metadataStatus, 'Unavailable · ownership verified');
   assert.equal(body.total, 1); assert.equal(body.nextCursor, null);
+});
+
+test('missing artwork generates stored description-based SVG and immutable metadata', async t => {
+  const f = fixture(); t.after(() => f.sqlite.close());
+  const objects = new Map();
+  f.env.MEDIA = {
+    async put(key, value, options) { objects.set(key, {value, ...options}); },
+    async get(key) { const object = objects.get(key); return object && {body: object.value, httpMetadata: object.httpMetadata, async json() {return JSON.parse(object.value);} }; }
+  };
+  const details = {name: 'Campus Code Night', description: 'A coding hackathon with friends <script>alert(1)</script>'};
+  assert.equal((await f.request('/artwork', details)).status, 401);
+  assert.equal((await f.request('/artwork', details, await f.login(f.outsider))).status, 200);
+  const cookie = await f.login(f.admin);
+  assert.equal((await f.request('/artwork', {...details, description: ''}, cookie)).status, 400);
+  const result = await f.request('/artwork', details, cookie); assert.equal(result.status, 200);
+  const media = await result.json(); assert.match(media.image, /\/art\/[a-f0-9]{64}\.svg$/);
+  const art = objects.get(media.image.split('/media/')[1]);
+  const svg = new TextDecoder().decode(art.value);
+  assert.match(svg, /TECHNOLOGY/); assert.match(svg, /Campus Code Night/);
+  assert(!svg.includes('<script>')); assert.match(svg, /&lt;script&gt;/);
+  assert.equal(art.httpMetadata.contentType, 'image/svg+xml');
+  const metadata = JSON.parse(objects.get(media.uri.split('/media/')[1]).value);
+  assert.deepEqual(metadata, {...details, name: details.name, image: media.image});
+  const served = await createHandler()(new Request(media.image), f.env);
+  assert.equal(served.status, 200); assert.equal(await served.text(), svg);
+  assert.match(served.headers.get('cache-control'), /immutable/);
+  assert.deepEqual(await (await f.request('/artwork', details, cookie)).json(), media);
+});
+
+test('organizer drafts persist privately, submit to admin review and publish atomically', async t => {
+  const f = fixture(); t.after(() => f.sqlite.close());
+  const objects = new Map();
+  f.env.MEDIA = { async put(key,value,options) {objects.set(key,{value,...options});}, async get(key) {const object=objects.get(key);return object && {body:object.value,httpMetadata:object.httpMetadata,async json(){return JSON.parse(object.value);}};} };
+  const owner = await f.login(f.staff), outsider = await f.login(f.outsider), admin = await f.login(f.admin);
+  const media = await (await f.request('/artwork',{name:'A real campus workshop',description:'Learn coding with our campus community'},owner)).json();
+  const start=Math.floor(Date.now()/1000)+7200;
+  const details={title:'A real campus workshop',description:'Learn coding with our campus community',club:'Campus builders',category:'Workshop',venue:'Hall A',cap:50,eventStartsAt:start,eventEndsAt:start+3600,mintStartsAt:start,mintEndsAt:start+7200,rsvpDeadline:start-60,...media};
+  assert.equal((await f.request('/organizer/events',details)).status,401);
+  const save=await f.request('/organizer/events',{...details,organizer:f.outsider.address},owner);assert.equal(save.status,201);
+  const draft=await save.json();assert.equal(draft.status,'draft');
+  const mine=await (await f.request('/organizer/events',undefined,owner)).json();assert.equal(mine.length,1);assert.equal(mine[0].details.organizer,f.staff.address);
+  assert.deepEqual(await (await f.request('/organizer/events',undefined,outsider)).json(),[]);
+  assert.equal((await f.request('/organizer/events',{...details,id:draft.id},outsider)).status,403);
+  assert.equal((await f.request('/organizer/events',{...details,title:'Changed without new metadata',id:draft.id},owner)).status,409);
+  assert.equal((await f.request('/organizer/events',{...details,id:draft.id,submit:true},owner)).status,200);
+  assert.equal((await f.request('/organizer/review',undefined,owner)).status,403);
+  assert.equal((await (await f.request('/organizer/review',undefined,admin)).json()).length,1);
+  assert.equal((await f.request('/events',{...details,id:2,draftId:draft.id},owner)).status,403);
+  f.chain.event=async()=>({uri:media.uri,cap:50n,startsAt:BigInt(start),endsAt:BigInt(start+7200)});
+  f.chain.contract={async eventAdmin(){return f.staff.address;}};
+  const published=await f.request('/events',{...details,id:2,draftId:draft.id},admin);assert.equal(published.status,201);
+  assert.equal(f.sqlite.prepare('SELECT status,event_id FROM organizer_drafts WHERE id=?').get(draft.id).status,'published');
+  assert.equal((await f.request('/organizer/events',{...details,id:draft.id},owner)).status,409);
+  assert.equal((await f.request('/events',{...details,id:2,draftId:draft.id},admin)).status,200);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS count FROM events WHERE id=2').get().count,1);
+});
+
+test('video collectibles store validated animation metadata and retain a generated poster', async t => {
+  const f=fixture();t.after(()=>f.sqlite.close());const objects=new Map();
+  f.env.MEDIA={async put(key,value,options){objects.set(key,{value,...options});},async get(key){const object=objects.get(key);return object && {body:object.value,httpMetadata:object.httpMetadata,async json(){return JSON.parse(object.value);}};}};
+  const cookie=await f.login(f.staff),input={name:'Campus film night',description:'Art and music from our students'};
+  assert.equal((await f.request('/artwork',{...input,video:'data:video/mp4;base64,AAAA'},cookie)).status,400);
+  assert.equal((await f.request('/artwork',{...input,video:'data:text/html;base64,AAAA'},cookie)).status,400);
+  const bytes=Uint8Array.from([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0]);
+  const video='data:video/mp4;base64,'+Buffer.from(bytes).toString('base64');
+  const result=await f.request('/artwork',{...input,video},cookie);assert.equal(result.status,200);const media=await result.json();
+  assert.match(media.image,/\.svg$/);assert.match(media.animationUrl,/\/video\/[a-f0-9]{64}\.mp4$/);
+  const metadata=JSON.parse(objects.get(media.uri.split('/media/')[1]).value);assert.equal(metadata.animation_url,media.animationUrl);assert.equal(metadata.image,media.image);
+  const start=Math.floor(Date.now()/1000)+3600;
+  f.chain.event=async()=>({uri:media.uri,cap:5n,startsAt:BigInt(start),endsAt:BigInt(start+7200)});
+  f.chain.contract={async eventAdmin(){return f.staff.address;}};
+  const details={id:2,title:input.name,description:input.description,club:'Film club',category:'Arts',venue:'Hall A',rsvpDeadline:start-60,eventStartsAt:start,eventEndsAt:start+3600,...media};
+  assert.equal((await f.request('/events',details,await f.login(f.admin))).status,201);
+  const listing=(await (await f.request('/events')).json()).find(event=>event.id===2);assert.equal(listing.animationUrl,media.animationUrl);
+  f.chain.collectionPage=async()=>({total:1,items:[{id:2,tokenId:'2',uri:media.uri,organizer:f.staff.address}],nextCursor:null});
+  const collection=await (await f.request('/wallet-collection?wallet='+f.outsider.address)).json();assert.equal(collection.items[0].animationUrl,media.animationUrl);
+  const served=await createHandler()(new Request(media.animationUrl),f.env);assert.equal(served.headers.get('content-type'),'video/mp4');assert.deepEqual(new Uint8Array(await served.arrayBuffer()),bytes);
 });
