@@ -57,3 +57,8 @@ The Expo Android project now hosts the same production interface in a trusted-or
 - Generated manifest checked: MetaMask package visibility, CAMERA/INTERNET permissions, no microphone, media-library or overlay permission, single-task deep-link activity, unspecified orientation and keyboard resize.
 - Chrome layout checks passed About, documentation, organiser entry and collection at 320×568, 360×640, 393×852, 844×390 and 768×1024. A contract-address min-content overflow in documentation was found and fixed. These checks cover the rendered shared interface, not Android device rendering.
 - Signed APK build is pending Expo account login. There is no Android SDK on this workstation. Native wallet return, camera, photo/video chooser, sharing, keyboard and rotation require the resulting APK on Android hardware. No real mint transaction was performed during this Android update.
+
+
+## Current status: local verification before deployment
+
+The earlier deployment records above are historical. Deployment is now deferred at the user’s request. See [local-verification.md](local-verification.md) for the isolated local Worker/EVM checks, changes and remaining browser-access boundary.

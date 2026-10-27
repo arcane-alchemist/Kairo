@@ -11,8 +11,8 @@ export default function KairoApp() {
   const web = useRef<WebView>(null);
   const loadedUrl = useRef(WEBSITE_URL);
   const sharing = useRef(false);
-  const [error,setError] = useState('');
-  const [loading,setLoading] = useState(true);
+  const [error,setError] = useState(WEBSITE_URL ? '' : 'This app build is not configured. Install an updated Kairo app.');
+  const [loading,setLoading] = useState(Boolean(WEBSITE_URL));
   const pageReady = useRef(false);
   const appliedRoute = useRef('');
   const {route} = useLocalSearchParams<{route?:string}>();
@@ -71,7 +71,7 @@ export default function KairoApp() {
   },[]);
 
   return <SafeAreaView style={styles.screen} edges={['top','right','bottom','left']}>
-    <WebView ref={web} style={styles.web} source={{uri:WEBSITE_URL}} applicationNameForUserAgent="KairoAndroid/1.1.0"
+    {WEBSITE_URL && <WebView ref={web} style={styles.web} source={{uri:WEBSITE_URL}} applicationNameForUserAgent="KairoAndroid/1.1.0"
       javaScriptEnabled domStorageEnabled sharedCookiesEnabled thirdPartyCookiesEnabled={false}
       originWhitelist={['*']} mixedContentMode="never" allowFileAccess={false} allowUniversalAccessFromFileURLs={false}
       javaScriptCanOpenWindowsAutomatically={false} setSupportMultipleWindows allowsFullscreenVideo allowsInlineMediaPlayback mediaPlaybackRequiresUserAction
@@ -89,11 +89,11 @@ export default function KairoApp() {
       onHttpError={event => {if (isAppUrl(event.nativeEvent.url) && new URL(event.nativeEvent.url).pathname === '/' && event.nativeEvent.statusCode >= 400) {setLoading(false);setError('Kairo is temporarily unavailable. Please retry shortly.');}}}
       onRenderProcessGone={() => {setLoading(false);setError('Android closed this page to free memory. Reload to return to Kairo.');}}
       webviewDebuggingEnabled={__DEV__}
-    />
+    />}
     {loading && !error && <View pointerEvents="none" style={styles.loading}><ActivityIndicator accessibilityLabel="Loading Kairo" color={COLORS.ink}/></View>}
     {!!error && <View style={styles.error} accessibilityViewIsModal><ScrollView contentContainerStyle={styles.errorContent}>
       <Text style={styles.eyebrow}>YOUR MOMENTS ARE STILL YOURS.</Text><Text style={styles.title}>Let’s get you{ '\n'}connected.</Text><Text style={styles.body} accessibilityRole="alert">{error}</Text>
-      <Pressable accessibilityRole="button" style={styles.button} onPress={() => {setError('');setLoading(true);web.current?.reload();}}><Text style={styles.buttonText}>Try again ↗</Text></Pressable>
+      <Pressable accessibilityRole="button" style={styles.button} onPress={() => {setError(WEBSITE_URL ? '' : 'This app build is not configured. Install an updated Kairo app.');setLoading(Boolean(WEBSITE_URL));web.current?.reload();}}><Text style={styles.buttonText}>Try again ↗</Text></Pressable>
     </ScrollView></View>}
   </SafeAreaView>;
 }

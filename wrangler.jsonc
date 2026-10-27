@@ -1,6 +1,7 @@
 {
   "name": "kairo",
   "workers_dev": true,
+  "dev": { "port": 8787 },
   "routes": [],
   "main": "serverless/worker.js",
   "compatibility_date": "2026-10-01",
@@ -16,7 +17,11 @@
     "CONTRACT_ADDRESS": "0x999524Cb77Db83864DA6FAC42614387921933922",
     "MAX_FEE_GWEI": "10",
     "SITE_ORIGIN": "https://kairo-site-7fb.pages.dev",
-    "ISSUER_ADDRESS": "0xA6db1b3944999e6953532a4EB6031f2B5DC36a26"
+    "ISSUER_ADDRESS": "0xA6db1b3944999e6953532a4EB6031f2B5DC36a26",
+    "CHAIN_ID": "11155111",
+    "CHAIN_NAME": "Sepolia",
+    "PUBLIC_RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com",
+    "EXPLORER_URL": "https://sepolia.etherscan.io"
   },
   "d1_databases": [
     {

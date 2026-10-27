@@ -1,4 +1,6 @@
-import { Contract, JsonRpcProvider, Wallet, Transaction, keccak256, parseUnits } from 'ethers';
+import { Contract, FetchRequest, JsonRpcProvider, Wallet, Transaction, keccak256, parseUnits } from 'ethers';
+
+import { ServiceError } from './errors.js';
 
 export const ABI = [
   'function DEFAULT_ADMIN_ROLE() view returns (bytes32)',
@@ -20,9 +22,12 @@ export const ABI = [
 ];
 
 export async function connectChain(env) {
-  const provider = new JsonRpcProvider(env.SEPOLIA_RPC_URL, 11155111, { staticNetwork: true });
+  const rpcUrl = env.SEPOLIA_RPC_URL || env.PUBLIC_RPC_URL;
+  if (!rpcUrl) throw new ServiceError('NOT_CONFIGURED','Kairo RPC is not configured.');
+  const connection = new FetchRequest(rpcUrl); connection.timeout = 8000;
+  const provider = new JsonRpcProvider(connection, 11155111, {staticNetwork:true});
   // Do not trust configuration to select the network used for sponsored transactions.
-  if (BigInt(await provider.send('eth_chainId', [])) !== 11155111n) throw new Error('Wrong chain');
+  if (BigInt(await provider.send('eth_chainId', [])) !== 11155111n) throw new ServiceError('WRONG_NETWORK','Your wallet or the network is wrong. Use the configured test network.','rpc',409);
   const contract = new Contract(env.CONTRACT_ADDRESS, ABI, provider);
   return {
     provider, contract,

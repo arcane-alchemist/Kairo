@@ -1,7 +1,35 @@
 {
-  "cli": { "version": ">= 16.0.0" },
+  "cli": {
+    "version": ">= 16.0.0"
+  },
   "build": {
-    "preview": { "distribution": "internal", "android": { "buildType": "apk" } },
-    "production": { "android": { "buildType": "app-bundle" } }
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "extends": "base"
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "extends": "base"
+    },
+    "device-local": {
+      "extends": "preview",
+      "env": {
+        "EXPO_PUBLIC_KAIRO_LOCAL": "1",
+        "EXPO_PUBLIC_API_URL": "http://127.0.0.1:8787"
+      },
+      "android": {
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a"
+      }
+    },
+    "base": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://kairo-site-7fb.pages.dev"
+      }
+    }
   }
 }

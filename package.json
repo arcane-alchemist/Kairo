@@ -6,19 +6,20 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "forge test && node --test backend/*.test.js serverless/*.test.js frontend/*.test.js",
+    "test": "forge test && node --test backend/*.test.js serverless/*.test.js frontend/*.test.js scripts/smoke-local.test.js",
     "test:contracts": "forge test",
     "start": "npm run dev",
     "start:legacy": "node --env-file=.env backend/server.js",
     "build": "node scripts/build-frontend.js",
-    "dev": "npm run build && npm run db:local && wrangler dev --local-upstream localhost",
+    "dev": "npm run build && npm run db:local && wrangler dev",
     "db:local": "wrangler d1 migrations apply kairo --local",
     "deploy:app": "npm run build && wrangler deploy",
     "preflight:app": "node scripts/preflight-app.js",
     "secrets:app": "node scripts/upload-runtime-secrets.js",
     "deploy:sepolia": "node --env-file=.env scripts/deploy.js",
     "smoke:sepolia": "node --env-file=.env scripts/smoke-sepolia.js",
-    "deploy:pages": "npm run build && node scripts/deploy-pages.js"
+    "deploy:pages": "npm run build && node scripts/deploy-pages.js",
+    "smoke:local": "node scripts/smoke-local.js"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

@@ -10,7 +10,21 @@ Wallet connection starts only after the user taps Connect. The official MetaMask
 
 The native shell handles Android safe areas, portrait/landscape resizing, keyboard resizing, back navigation, trusted deep links, and QR PNG sharing through Android’s share sheet. Media uploads use Android’s file chooser. Camera access is requested by Android when a camera workflow needs it. Storage-library, microphone and overlay permissions are blocked. External HTTPS links open in the system browser. Native messages validate their origin, action, file size and filename.
 
-An internet connection is required. A failed page load displays a themed retry screen. The app does not simulate a backend response when disconnected. Backend: https://kairo.aakritigupta7227.workers.dev. The fixed website origin is in `src/shell.ts`; the website proxies API requests to the Worker using its deployed configuration.
+An internet connection is required. A failed page load displays a themed retry screen. The app does not simulate a backend response when disconnected. Backend: https://kairo.aakritigupta7227.workers.dev. The trusted website/API origin comes from `EXPO_PUBLIC_API_URL` in the EAS build profile; production uses HTTPS and the USB profile uses the configured loopback origin; the website proxies API requests to the Worker using its deployed configuration.
+
+## Test on a USB-connected Android phone
+
+`npm run build:local-apk` builds the standalone `device-local` APK. This profile compiles in the configured loopback website URL and enables Android HTTP traffic for that local build. Normal preview/production builds keep HTTPS and disable cleartext traffic. No backend secret is part of either bundle.
+
+Keep the local Worker running on port 8787, authorize USB debugging on the phone, then run:
+
+```sh
+adb devices
+adb reverse tcp:8787 tcp:8787
+adb install --user 0 -r /path/to/kairo-local.apk
+```
+
+The phone reaches the computer’s local server through the USB reverse tunnel. Keep USB connected while using this build. It uses the local Worker and its configured RPC, independently of website deployment.
 
 ## Development
 
@@ -19,6 +33,7 @@ Use Node 24 or newer:
 ```sh
 cd app
 npm ci
+cp .env.example .env
 npm start
 ```
 
@@ -42,9 +57,9 @@ npx eas-cli@latest login
 npm run build:apk
 ```
 
-The preview EAS profile produces a signed, installable APK. On the first build, link/create the Expo project and generate its Android signing credentials in your account. `npm run build:aab` produces a production Android App Bundle; store submission is separate. No Expo project ID, account credential or signing key is fabricated in this repository.
+The preview EAS profile produces a signed, installable APK. The project is linked to `@aakriti2006/kairo-home`; Android signing credentials are managed by that Expo account. `npm run build:aab` produces a production Android App Bundle; store submission is separate. The real EAS project ID is stored in app configuration. Account credentials and private signing keys are not stored in the repository.
 
-Build status: Android export, unit tests, lint and typecheck can run locally. An installable APK has not yet been built because EAS is signed out and this workstation has no Android SDK. Physical-device verification of MetaMask approval/return, camera, file/video upload, QR sharing, keyboard and rotation remains required before release.
+Build status: EAS is authenticated and the signed USB-test APK build is in progress. Android export, nine app tests, lint and typecheck pass. Physical-device wallet return, camera, file/video upload, sharing, keyboard and rotation still require device QA.
 
 ## Release checks
 

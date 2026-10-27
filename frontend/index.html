@@ -11,38 +11,34 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Outfit:wght@500;600;650;700;750;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css">
-    <title>POAP — Little tokens. Big memories.</title>
+    <title>Kairo — Keep your moments</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header wrap">
       <a class="logo" href="#" aria-label="POAP home"><svg viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-tile" x="2" y="2" width="36" height="36" rx="11"/><path class="logo-glyph" d="M13 29V11h8a6 6 0 0 1 0 12h-8"/></svg><span>POAP</span></a>
       <nav class="desktop-nav" aria-label="Main navigation">
-        <details class="nav-dropdown" name="main-sections"><summary>About</summary><div><a href="#about/proof">The idea</a><a href="#about/case-studies">What you can make</a></div></details>
-        <details class="nav-dropdown" name="main-sections"><summary>Issuer</summary><div><a href="#issuer/studio">Organizer studio</a><a href="#issuer/guide">How POAP works</a><a href="#issuer/manage">Manage attendance</a><a href="#tickets">My tickets</a></div></details>
-        <details class="nav-dropdown" name="main-sections"><summary>Collector</summary><div><a href="#collector/gallery">Gallery</a><a href="#collector/collectors">Collectors</a><a href="#collector/collection">Collection</a></div></details>
-        <details class="nav-dropdown" name="main-sections"><summary>Builders</summary><div><a href="#builders/build">Build with POAP</a><a href="#builders/documentation">Documentation</a></div></details>
+        <a href="#events">Events</a><a href="#gallery">Gallery</a><a href="#organize">Create</a><a href="#about/proof">About</a><a href="#builders/documentation">Builders</a>
       </nav>
       <button id="wallet-network" class="network-button" aria-label="Active wallet network" hidden>Switch to Sepolia</button>
       <button id="install-app" class="button button-small button-outline" hidden>Install ↓</button>
-      <button id="wallet" class="button button-small button-outline collection-button wallet-button"><span class="wallet-button-label">Connect MetaMask</span><span aria-hidden="true">↗</span></button>
+      <button id="wallet" class="button button-small button-outline collection-button wallet-button"><span class="wallet-button-label">Connect wallet</span><span aria-hidden="true">↗</span></button>
       <button class="menu-button" aria-label="Open navigation" aria-expanded="false" aria-controls="mobile-nav"><span></span><span></span></button>
     </header>
     <nav id="mobile-nav" class="mobile-nav" aria-label="Mobile navigation" hidden>
-      <details class="nav-dropdown" name="main-sections"><summary>About</summary><div><a href="#about/proof">The idea</a><a href="#about/case-studies">What you can make</a></div></details>
-      <details class="nav-dropdown" name="main-sections"><summary>Issuer</summary><div><a href="#issuer/guide">How it works</a><a href="#issuer/studio">Organizer studio</a><a href="#issuer/manage">Attendance desk</a></div></details>
-      <details class="nav-dropdown" name="main-sections"><summary>Collector</summary><div><a href="#collector/gallery">Gallery</a><a href="#collector/collectors">Participation profiles</a><a href="#collector/collection">Collection</a><a href="#tickets">My tickets</a></div></details>
-      <details class="nav-dropdown" name="main-sections"><summary>Builders</summary><div><a href="#builders/build">Create an event</a><a href="#builders/documentation">Documentation</a></div></details>
-      <button class="collection-button wallet-button">Connect MetaMask ↗</button>
-    </nav>
-    <div class="network-notice"><span><i class="status-dot" aria-hidden="true"></i> SEPOLIA TESTNET ONLY</span><p>Your moments. Your wallet. Your little proof of life.</p><a href="#builders/documentation">READ THE DOCUMENTATION ↗</a></div>
+        <a href="#events">Events</a><a href="#gallery">Gallery</a><a href="#organize">Create</a><a href="#about/proof">About</a><a href="#builders/documentation">Builders</a>
+      </nav>
+    <div class="network-notice"><span><i class="status-dot" aria-hidden="true"></i> <span data-network-name>Network loading…</span></span><p>Your moments. Your wallet. Your little proof of life.</p><a href="#builders/documentation">READ THE DOCUMENTATION ↗</a></div>
     <div id="connection-state" class="connection-banner" role="status" aria-live="polite" hidden></div>
+    <div id="request-error" class="connection-banner recovery-banner" role="alert" hidden></div>
+    <div id="app-update" class="connection-banner recovery-banner" role="status" hidden><span>A new version of Kairo is ready. Save your work, then refresh.</span><button class="button button-small">Refresh</button></div>
     <main id="main">
       <section class="hero wrap" data-home aria-labelledby="hero-title">
         <div class="hero-copy">
           <p class="eyebrow"><span class="status-dot"></span> THE PROOF IS IN THE MOMENT.</p>
           <h1 id="hero-title">Life happens.<br />Keep <span class="display-accent">a little</span><br /><span class="underlined">piece of it.<svg viewBox="0 0 620 30" preserveAspectRatio="none" aria-hidden="true"><path d="M5 15C140 2 370 3 610 12M18 25C230 9 420 14 565 21"/></svg></span><span class="heading-spark" aria-hidden="true">✳</span></h1>
           <p class="hero-description">The people. The places. The “you had to be there.”<br />Turn life’s best moments into little collectibles<br class="desktop-break" /> that stay with you. That’s a POAP.</p>
+          <div id="wallet-welcome" class="wallet-welcome"><p><strong>One wallet. Every moment.</strong><br>Connect once to use your Gallery and organizer studio across Kairo.</p><button id="home-connect" class="button button-dark" type="button">Connect wallet ↗</button></div>
           <div class="hero-actions"><a class="button button-dark" href="#collector/gallery">Find your next memory <span aria-hidden="true">↗</span></a><a class="text-link" href="#about/proof">Wait, what’s a POAP? <span aria-hidden="true">↗</span></a></div>
           <svg class="moving-doodle hero-heart doodle-heart" viewBox="0 0 90 90" aria-hidden="true"><path d="M45 72C8 48 8 18 28 18c10 0 17 11 17 11s7-11 17-11c20 0 20 30-17 54Z"/></svg><div class="hero-note"><span class="tiny-smile" aria-hidden="true">☺</span><span>No price tag on a good memory.</span></div>
         </div>
@@ -59,7 +55,6 @@
         <div class="hero-bottom"><span>FOR THE MOMENTS THAT MAKE YOU, YOU.</span><a href="#collectibles">GOOD THINGS BELOW <span aria-hidden="true">↓</span></a></div>
       </section>
       <div class="ticker" data-home aria-label="You had to be there. Now you can prove it. Collect moments, not things."><div class="ticker-track" aria-hidden="true"><span>YOU HAD TO BE THERE.</span><i>✳</i><span>NOW YOU CAN PROVE IT.</span><i>✳</i><span>COLLECT MOMENTS, NOT THINGS.</span><i>✳</i><span>YOU HAD TO BE THERE.</span><i>✳</i><span>NOW YOU CAN PROVE IT.</span><i>✳</i><span>COLLECT MOMENTS, NOT THINGS.</span><i>✳</i></div></div>
-      <section id="platform" class="platform-page" aria-labelledby="area-title" hidden></section>
       <section id="collectibles" class="collection-section wrap" data-home aria-labelledby="collection-title">
         <svg class="moving-doodle collection-flower doodle-flower" viewBox="0 0 90 90" aria-hidden="true"><path d="M45 24C22 0 3 33 29 43 0 63 35 87 45 59c10 28 45 4 16-16C87 33 68 0 45 24Z"/><circle cx="45" cy="43" r="8"/></svg><div class="section-heading"><div><p class="eyebrow">LITTLE TOKENS. BIG STORIES.</p><h2 id="collection-title">A moment for <span class="display-accent">every you.</span><svg class="heading-doodle" viewBox="0 0 90 70" aria-hidden="true"><path d="M15 58 50 7l-1 23L78 18 54 59l1-23Z"/></svg></h2></div><p>Out there, making memories?<br />There might just be a POAP for that.</p></div>
         <div class="collection-toolbar"><div class="filter-tabs" role="group" aria-label="Filter collectibles"><button class="filter-tab active" data-filter="all" aria-pressed="true">A little of everything <span>0</span></button><button class="filter-tab" data-filter="music" aria-pressed="false">Music & good times</button><button class="filter-tab" data-filter="community" aria-pressed="false">IRL connections</button><button class="filter-tab" data-filter="art" aria-pressed="false">Art & internet things</button></div></div>
@@ -71,13 +66,8 @@
       </section>
       <section id="create" class="create-section wrap" data-home><div class="create-doodle" aria-hidden="true"><svg viewBox="0 0 140 150"><path d="M34 112C1 89 20 60 41 71 7 43 32 19 53 43 40 1 81-1 82 38c15-33 50-12 30 19 39-7 41 29 7 35 30 20 3 48-21 28 1 34-35 34-39 6-23 24-45 0-25-14Z"/><path d="M52 76v11m26-13v11m-29 12q18 21 36-2"/></svg></div><p class="eyebrow">CALLING ALL MEMORY-MAKERS</p><svg class="moving-doodle create-spark doodle-spark" viewBox="0 0 90 90" aria-hidden="true"><path d="m45 5 8 27 27 8-27 9-8 28-9-28-28-9 28-8Z"/></svg><h2>Make it a moment.<br /><span class="display-accent">Make it a POAP.</span></h2><p>You bring the people. We’ll bring the little keepsake.</p><button class="button button-dark" id="create-button">Make something worth keeping <span aria-hidden="true">↗</span></button><span class="handwritten create-note">for your next big little thing ♡</span></section>
     </main>
-    <footer class="site-footer wrap"><a class="footer-wordmark" href="#" aria-label="NTL — back to top"><span class="footer-logo" aria-hidden="true"></span><span class="footer-title" aria-hidden="true"><span>N</span><span>T</span><span>L</span></span></a><div class="footer-bottom"><span>A little proof of a life well lived.</span><span>KAIRO · SOULBOUND COLLECTIBLES · SEPOLIA</span><a href="#">BACK TO THE GOOD STUFF ↑</a></div></footer>
-    <dialog id="badge-dialog" class="modal" aria-labelledby="badge-dialog-title"><button class="modal-close" aria-label="Close dialog">×</button><div id="dialog-body"></div></dialog>
-    <dialog id="collection-dialog" class="modal collection-modal"><button class="modal-close" aria-label="Close collection">×</button><p class="eyebrow">YOUR LITTLE SCRAPBOOK</p><h2>Good times,<br /><span class="display-accent">collected.</span></h2><p class="collection-explanation">Your saved favorites live in this browser. A little preview of your future collection.</p><div id="saved-grid"></div></dialog>
-    <dialog id="create-dialog" class="modal create-modal"><button class="modal-close" aria-label="Close creator">×</button><p class="eyebrow">LET’S MAKE A LITTLE MEMORY</p><h2>What’s the<br /><span class="display-accent">occasion?</span></h2><form id="create-form"><label for="event-name">Give your moment a name</label><input id="event-name" name="name" maxlength="60" placeholder="The best Tuesday ever" required /><label for="event-vibe">Pick a little personality</label><select id="event-vibe" name="vibe"><option value="flower">Flower power</option><option value="planet">Out of this world</option><option value="sun">A little sunshine</option></select><button class="button button-dark" type="submit">Preview my POAP <span aria-hidden="true">↗</span></button></form><div id="create-preview" hidden></div><p class="demo-note">A design preview, just for fun. Nothing is minted or sent.</p></dialog>
-    <dialog id="wallet-dialog" class="modal wallet-modal" data-platform-dialog aria-label="Wallet sign-in"><button class="modal-close" aria-label="Close wallet sign-in">×</button><div id="wallet-body"></div></dialog>
-    <dialog id="event-dialog" class="modal platform-modal" data-platform-dialog aria-labelledby="event-dialog-title"><button class="modal-close" aria-label="Close event details">×</button><div id="event-body"></div></dialog>
-    <dialog id="modal" class="modal" aria-label="Kairo details"><button class="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
+    <footer class="site-footer wrap"><a class="footer-wordmark" href="#" aria-label="Back to top"><span class="footer-logo" aria-hidden="true"></span></a><div class="footer-bottom"><span>A little proof of a life well lived.</span><span>KAIRO · SOULBOUND COLLECTIBLES · <span data-network-name>Network loading…</span></span><a href="#">BACK TO THE GOOD STUFF ↑</a></div></footer>
+    <dialog id="modal" class="modal" aria-label="Kairo details"><button type="button" class="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
     <div id="toast" class="toast" role="status"></div>
     <script type="module" src="/app.js"></script>
   </body>

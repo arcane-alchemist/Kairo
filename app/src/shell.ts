@@ -1,5 +1,12 @@
-export const SITE_ORIGIN = 'https://kairo-site-7fb.pages.dev';
-export const WEBSITE_URL = SITE_ORIGIN + '/';
+let configuredOrigin = '';
+try {
+  const value = process.env.EXPO_PUBLIC_API_URL || '';
+  const url = new URL(value);
+  const local = process.env.EXPO_PUBLIC_KAIRO_LOCAL === '1' && url.protocol === 'http:' && url.hostname === '127.0.0.1';
+  if ((url.protocol === 'https:' || local) && !url.username && !url.password && value.replace(/\/$/,'') === url.origin) configuredOrigin = url.origin;
+} catch { /* Missing build configuration is shown by the native error screen. */ }
+export const SITE_ORIGIN = configuredOrigin;
+export const WEBSITE_URL = SITE_ORIGIN ? SITE_ORIGIN + '/' : '';
 // sRGB equivalents of the live website’s OKLCH tokens.
 export const COLORS = { background: '#e7ddf6', ink: '#321846', paper: '#faf7f1', accent: '#d5f161' };
 
@@ -33,7 +40,7 @@ export function routeFromLink(value: string): string | null {
     const drop = url.searchParams.get('drop');
     if (drop && /^[1-9]\d*$/.test(drop)) return 'drop/' + drop;
     const hash = url.hash.slice(1);
-    return /^(?:about\/(?:proof|case-studies)|issuer\/(?:studio|guide|manage)|collector\/(?:gallery|collectors|collection)|builders\/(?:build|documentation)|tickets|drop\/[1-9]\d*|ticket\/[a-f0-9-]{36})$/i.test(hash) ? hash : null;
+    return /^(?:events|gallery|organize|about\/(?:proof|case-studies)|issuer\/(?:studio|guide|manage)|collector\/(?:gallery|collectors|collection)|builders\/(?:build|documentation)|tickets|drop\/[1-9]\d*|ticket\/[a-f0-9-]{36})$/i.test(hash) ? hash : null;
   } catch { return null; }
 }
 

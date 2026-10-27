@@ -1,12 +1,3 @@
-export const badges = [
-  { id: 'flower', name: 'A very good day', event: 'THE LITTLE JOYS CLUB', category: 'community', color: 'lavender', date: 'OCT 12, 2026', location: 'Anywhere, together', description: 'For the impromptu plans, the new friends, and the afternoons you wish would last a little longer.', label: 'GOOD TIMES GROW HERE', kind: 'flower' },
-  { id: 'planet', name: 'Somewhere out there', event: 'AFTER HOURS SESSIONS', category: 'music', color: 'peach', date: 'OCT 18, 2026', location: 'Somewhere after dark', description: 'One more song. One more dance. A little reminder of a night that felt out of this world.', label: 'SOMEWHERE OUT THERE', kind: 'planet' },
-  { id: 'sun', name: 'Internet friends, IRL', event: 'OFFLINE & TOGETHER', category: 'community', color: 'lime', date: 'OCT 20, 2026', location: 'The real world', description: 'From tiny avatars to real-life hugs. Here’s to the people who make the internet feel a little smaller.', label: 'NICE TO FINALLY MEET YOU', kind: 'sun' },
-  { id: 'eye', name: 'A different perspective', event: 'OPEN STUDIO WEEKEND', category: 'art', color: 'pink', date: 'OCT 24, 2026', location: 'The open studio', description: 'New ideas, messy sketchbooks, and seeing the everyday a little differently. Keep your eyes open.', label: 'SEE THINGS DIFFERENTLY', kind: 'eye' },
-  { id: 'music', name: 'Just one more song', event: 'THE LISTENING ROOM', category: 'music', color: 'blue', date: 'OCT 25, 2026', location: 'The listening room', description: 'That bassline. That feeling. The kind of night you remember with your whole body.', label: 'SOUNDTRACK TO A GOOD NIGHT', kind: 'music' },
-  { id: 'heart', name: 'Made with a little love', event: 'THE CREATIVE CORNER', category: 'art', color: 'butter', date: 'OCT 26, 2026', location: 'The creative corner', description: 'Made by hand, shared with friends. For everyone who left a little piece of themselves in what they made.', label: 'MAKE STUFF FEEL SOMETHING', kind: 'heart' }
-];
-
 const colors = {
   flower: ['#d0b6ef', '#e0cefa', '#bde366', '#3e2854'],
   planet: ['#f5a482', '#ffcf9e', '#ad9cdd', '#5b3450'],

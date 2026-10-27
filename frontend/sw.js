@@ -1,8 +1,8 @@
-const CACHE = 'kairo-android-v6';
+const CACHE = 'kairo-recovery-v13';
 const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
 const PUBLIC = ['/api/events', '/api/config'];
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('kairo-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
@@ -31,7 +31,7 @@ self.addEventListener('fetch', event => {
       }
       return response;
     } catch {
-      return await cache.match(request) || (request.mode === 'navigate' ? await cache.match('/offline.html') : null) || new Response('Offline. Reconnect to load this content.', { status: 503 });
+      return await cache.match(request) || (request.mode === 'navigate' ? await cache.match('/offline.html') : null) || new Response(JSON.stringify({error:'Can’t reach Kairo. Check your connection, then retry.',code:'UNREACHABLE'}), {status:503,headers:{'content-type':'application/json','cache-control':'no-store'}});
     }
   })());
 });

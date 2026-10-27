@@ -57,7 +57,8 @@ export async function mintNext(db, chain) {
 
 export class MintCoordinator {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
-  async fetch() {
+  async fetch(request) {
+    if (new URL(request.url).pathname === '/health') { await this.ctx.storage.getAlarm(); return Response.json({ok:true}); }
     if (!await this.ctx.storage.getAlarm()) await this.ctx.storage.setAlarm(Date.now() + 1000);
     return Response.json({ queued: true });
   }

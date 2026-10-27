@@ -2,3 +2,6 @@ SEPOLIA_RPC_URL=
 ISSUER_PRIVATE_KEY=
 STUDENT_HASH_SECRET=
 ISSUER_ADDRESS=
+
+# Local browser origin; production origin stays in deployment configuration.
+SITE_ORIGIN=http://localhost:8787

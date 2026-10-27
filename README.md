@@ -5,7 +5,7 @@ College-event RSVPs, verified in-person check-in, and permanent soulbound collec
 ## What is implemented
 
 - Live event discovery with 15-second refresh, category filters and search, remaining capacity, event details and public RSVP.
-- Address-only attendee registration, wallet-QR scanning, permanent-collectible consent and downloadable ticket QR.
+- Registration for the signed-in wallet, permanent-collectible consent and downloadable ticket QR.
 - Organizer wallet sign-in using an expiring, single-use signature challenge and HttpOnly session cookie.
 - College-admin event publication: artwork upload or badge generator, preview, frozen metadata, wallet-confirmed on-chain event creation and resumable publication.
 - Event-scoped organizer dashboard, attendee list, ticket scanner, audited check-in, issuer permission changes and issuance pause/resume.
@@ -43,18 +43,25 @@ Open `http://localhost:8787/` for the connected app. No sample events or preview
 
 Set these in ignored `.dev.vars`:
 
-- `SEPOLIA_RPC_URL`: Sepolia RPC endpoint.
+- `SEPOLIA_RPC_URL`: optional dedicated endpoint; otherwise the Worker uses `PUBLIC_RPC_URL` from configuration. An absent value never selects a localhost RPC.
 - `ISSUER_PRIVATE_KEY`: dedicated, funded Sepolia relayer wallet. Never use it for other transactions while the queue runs.
 - `ISSUER_ADDRESS`: the same wallet’s public address, used by the creation form.
-- `STUDENT_HASH_SECRET`: independent random secret with at least 32 characters; back it up with D1.
+- `STUDENT_HASH_SECRET`: independent random secret with at least 32 characters; back it up with D1. Never rotate it for an existing registration database.
+- `SITE_ORIGIN`: the browser origin for this environment, including the port in local development.
+
+After the server reports `Ready on http://localhost:8787`, run `npm run smoke:local`. This reads `/api/config`, `/api/health` and `/api/events`; it never publishes or mints. A degraded health check names the failing dependency. `KAIRO_LOCAL_URL` can select another loopback origin.
+
+If startup reports empty/invalid JSON in an installed dependency, check whether the project is offloaded by iCloud. Download the project locally, then run `npm ci` from the valid lockfile. Keep active development files available offline. A failed build means no new dev server starts; a stale process may still serve an older bundle. Avoid starting a second server on another port accidentally.
 
 The deployer key is never used by the serverless API. The college admin connects their wallet in the browser to publish an event. The event’s initial issuer must match the configured relayer. Organizers can grant additional event issuer permissions in the dashboard; the contract allows these trusted issuers to mint directly, so grant access carefully.
 
-For new event artwork, upload PNG/JPEG up to 1 MB or generate a badge. R2 keys include a content hash; uploaded metadata is frozen before the on-chain event is created. Use a stable production domain for event creation: local `localhost` metadata URLs cannot be read by external wallets. Back up the bucket; content-addressed URLs still depend on hosting availability. No student identifiers belong in collectible metadata.
+For new event artwork, upload PNG/JPEG up to 2 MB, upload MP4/WebM up to 10 MB, or generate an animated SVG badge from the description. R2 keys include a content hash; uploaded metadata is frozen before the on-chain event is created. Use a stable production domain for event creation: local `localhost` metadata URLs cannot be read by external wallets. Back up the bucket; content-addressed URLs still depend on hosting availability. No student identifiers belong in collectible metadata.
+
+The latest wallet, dialog, organiser-address, animation and XSS verification results are in [docs/local-verification.md](docs/local-verification.md). Keep normal local development on its actual host and port; overriding `--local-upstream` can remove the port from generated media URLs.
 
 ## Cloudflare deployment
 
-The website is deployed on Cloudflare Pages at https://kairo-site-7fb.pages.dev. Pages forwards same-origin API requests to the existing Worker at https://kairo.aakritigupta7227.workers.dev, with the remote `kairo` D1 database, all seven migrations applied, the `kairo-media` R2 bucket, and all three runtime secrets. The homepage and D1-backed event API passed live checks. The requested custom domain `poap.ntlap.in` remains deferred because Cloudflare reports that the `ntlap.in` zone does not exist in the authenticated account. Wrangler deploys to the working `workers.dev` address with no custom routes. Once the zone is active, add its custom-domain route to `wrangler.jsonc` before deploying. Run `npm run preflight:app` to verify the contract, runtime secrets and relayer funding before deployment.
+The production configuration targets Cloudflare Pages at https://kairo-site-7fb.pages.dev. Deployment is currently deferred while the changes are verified locally. When deployed, Pages forwards same-origin API requests to the Worker at https://kairo.aakritigupta7227.workers.dev, with the remote `kairo` D1 database, all seven migrations applied, the `kairo-media` R2 bucket, and all three runtime secrets. The homepage and D1-backed event API passed live checks. The requested custom domain `poap.ntlap.in` remains deferred because Cloudflare reports that the `ntlap.in` zone does not exist in the authenticated account. Wrangler deploys to the working `workers.dev` address with no custom routes. Once the zone is active, add its custom-domain route to `wrangler.jsonc` before deploying. Run `npm run preflight:app` to verify the contract, runtime secrets and relayer funding before deployment.
 
 ```sh
 npx wrangler login
@@ -156,8 +163,7 @@ The served entry point is `frontend/app.js`. The Kairos-ui visual shell now rout
 Gallery, Collection, Collectors, Build with POAP, and Manage attendance to the
 existing Worker/D1/R2/Sepolia flows. Empty databases stay empty; API failures show
 an error and retry. Static artwork in the hero and memory press is decorative.
-The standalone `frontend/main.js` and `frontend/platform.js` design reference is
-not bundled into the connected app.
+The unused design preview entry points and their simulated event data have been removed.
 
 `POST /api/artwork` accepts `{ name, description, image? }` using the existing
 admin session. With no image, the Worker generates an SVG badge from description

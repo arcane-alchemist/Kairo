@@ -36,7 +36,8 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "build:apk": "npx eas-cli@latest build --platform android --profile preview",
-    "build:aab": "npx eas-cli@latest build --platform android --profile production"
+    "build:aab": "npx eas-cli@latest build --platform android --profile production",
+    "build:local-apk": "npx eas-cli@latest build --platform android --profile device-local"
   },
   "private": true,
   "type": "module",

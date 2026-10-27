@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { matchesEvent, eventState, profileStats, filterCollection } from './student-model.js';
+import { matchesEvent, eventState, profileStats, filterCollection, groupCollection } from './student-model.js';
 const event = { id: 1, title: 'Build Night', campus: 'North Campus', club: 'Code Club', organizer: '0xabc', category: 'Hackathon', roles: ['Attendee', 'Mentor'], startsAt: 100, endsAt: 200 };
 test('discovery searches campus, organizer and roles and distinguishes active from past events', () => {
   for (const search of ['north', '0xabc', 'mentor']) assert(matchesEvent(event, { search }, 150));
@@ -14,4 +14,9 @@ test('profiles never count QR claims or unknown roles as verified attendance', (
   assert.deepEqual(profileStats(items), { participations: 1, events: 1, roles: ['Mentor'], organizations: ['Code Club'] });
   assert.equal(filterCollection(items, { role: 'Collector' }).length, 1);
   assert.equal(filterCollection(items, { search: 'absent' }).length, 0);
+});
+
+test('linked role drops group under their event and count as one attended event',()=>{
+ const items=[{id:2,groupId:'event-group',attendanceVerified:true,role:'Attendee',club:'Campus'},{id:3,groupId:'event-group',attendanceVerified:true,role:'Volunteer',club:'Campus'}];
+ assert.equal(groupCollection(items).length,1);assert.equal(profileStats(items).events,1);assert.equal(profileStats(items).participations,2);
 });

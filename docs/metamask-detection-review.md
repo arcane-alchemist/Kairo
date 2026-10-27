@@ -5,7 +5,7 @@ Claim page: https://kairo-site-7fb.pages.dev/#drop/2
 
 Please review the malicious-site classification of this college event collectible app. Attendees have reported a MetaMask malicious-site interstitial and high-risk sign-in warning. We do not yet know which detection provider or rule produced this classification.
 
-Kairo issues nontransferable, nonburnable ERC-721 attendance collectibles on Sepolia only. Contract: 0x999524Cb77Db83864DA6FAC42614387921933922. Backend: https://kairo.aakritigupta7227.workers.dev. Source: https://github.com/arcane-alchemist/Kairo.
+Kairo issues nontransferable, nonburnable ERC-721 attendance collectibles on Sepolia only. Contract: the contract from `/api/config`. Backend: https://kairo.aakritigupta7227.workers.dev. Source: https://github.com/arcane-alchemist/Kairo.
 
 The Connect button requests wallet accounts, switches to Sepolia, and requests a wallet-bound, single-use Sign-In with Ethereum (EIP-4361) signature. Server sessions last ten minutes. A separate Mint button submits an authenticated claim to the relayer; the relayer sponsors the Sepolia transaction. Success is shown only after confirmation. The frontend does not request token spending approvals, recovery phrases, wallet passwords, or private keys. The website does not request NFT import through the wallet.
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isAppUrl,isExternalUrl,isWalletUrl,routeFromLink,parseNativeRequest,nativeResultScript,SITE_ORIGIN} from './shell.ts';
+process.env.EXPO_PUBLIC_API_URL ||= 'https://kairo.test';
+const {isAppUrl,isExternalUrl,isWalletUrl,routeFromLink,parseNativeRequest,nativeResultScript,SITE_ORIGIN} = await import('./shell.ts');
 const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXuoAAAAASUVORK5CYII=';
 
 test('only the production HTTPS origin can retain the native WebView bridge',()=>{
@@ -38,4 +39,18 @@ test('native chrome uses the exact sRGB equivalents of the website palette',asyn
     const rgb=[4.0767416621*l-3.3077115913*m+.2309699292*s,-1.2684380046*l+2.6097574011*m-.3413193965*s,-.0041960863*l-.7034186147*m+1.707614701*s];
     const hex='#'+rgb.map(v=>Math.round(Math.max(0,Math.min(1,v<=.0031308?12.92*v:1.055*v**(1/2.4)-.055))*255).toString(16).padStart(2,'0')).join('');assert.equal(COLORS[name],hex,name);
   }
+});
+
+test('the USB test build trusts only its fixed loopback origin',async()=>{
+  const {execFileSync}=await import('node:child_process');
+  const output=execFileSync(process.execPath,['--input-type=module','-e',"import {SITE_ORIGIN,isAppUrl,isExternalUrl} from './src/shell.ts'; console.log(JSON.stringify({origin:SITE_ORIGIN,local:isAppUrl('http://127.0.0.1:8787/'),production:isAppUrl('https://kairo-site-7fb.pages.dev/'),other:isAppUrl('http://evil.test/'),externalHttp:isExternalUrl('http://evil.test/')}))"],{cwd:new URL('..',import.meta.url),env:{...process.env,EXPO_PUBLIC_KAIRO_LOCAL:'1',EXPO_PUBLIC_API_URL:'http://127.0.0.1:8787'},encoding:'utf8'});
+  assert.deepEqual(JSON.parse(output),{origin:'http://127.0.0.1:8787',local:true,production:false,other:false,externalHttp:false});
+});
+
+test('missing or unsafe build origins fail closed instead of falling back to a hardcoded server',async()=>{
+ const {execFileSync}=await import('node:child_process');
+ for(const value of ['', 'http://192.0.2.1:8787','https://user:secret@kairo.test','https://kairo.test/nested']){
+  const output=execFileSync(process.execPath,['--input-type=module','-e',"import {SITE_ORIGIN,WEBSITE_URL,isAppUrl} from './src/shell.ts'; console.log(JSON.stringify({origin:SITE_ORIGIN,url:WEBSITE_URL,allowed:isAppUrl('https://kairo.test/')}))"],{cwd:new URL('..',import.meta.url),env:{...process.env,EXPO_PUBLIC_KAIRO_LOCAL:'1',EXPO_PUBLIC_API_URL:value},encoding:'utf8'});
+  assert.deepEqual(JSON.parse(output),{origin:'',url:'',allowed:false});
+ }
 });

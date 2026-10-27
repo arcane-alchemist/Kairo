@@ -51,6 +51,13 @@
     "backgroundColor": "#e7ddf6",
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "726a54ab-40ec-4ba2-9c04-b5badea5f7d3"
+      }
+    },
+    "owner": "aakriti2006"
   }
 }

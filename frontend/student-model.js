@@ -1,4 +1,3 @@
-export const CATEGORIES = ['Hackathon', 'Workshop', 'Fest', 'Seminar', 'Club', 'Competition', 'Other', 'Technology', 'Arts', 'Community', 'Sports'];
 export function eventState(event, now = Date.now() / 1000) {
   if (event.endsAt < now) return 'Past event';
   if (event.startsAt <= now) return 'Happening now';
@@ -12,7 +11,7 @@ export function matchesEvent(event, { search = '', category = 'All events', date
 }
 export function profileStats(items) {
   const verified = items.filter(item => item.attendanceVerified);
-  return { participations: verified.length, events: new Set(verified.map(item => item.id)).size,
+  return { participations: verified.length, events: new Set(verified.map(item => item.groupId || item.id)).size,
     roles: [...new Set(verified.map(item => item.role))], organizations: [...new Set(verified.map(item => item.club))] };
 }
 export function filterCollection(items, { search = '', year = '', role = '', organization = '', sort = 'newest' } = {}) {
@@ -20,4 +19,14 @@ export function filterCollection(items, { search = '', year = '', role = '', org
     && (!year || (item.startsAt && String(new Date(item.startsAt * 1000).getFullYear()) === year))
     && (!role || item.role === role) && (!organization || item.club === organization))
     .sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title) : (sort === 'oldest' ? 1 : -1) * ((a.issuedAt || a.startsAt || 0) - (b.issuedAt || b.startsAt || 0)));
+}
+
+export function groupCollection(items) {
+  const events = new Map();
+  for (const item of items) {
+    const key = String(item.groupId || item.id);
+    if (!events.has(key)) events.set(key, {event:item, badges:[]});
+    events.get(key).badges.push(item);
+  }
+  return [...events.values()];
 }

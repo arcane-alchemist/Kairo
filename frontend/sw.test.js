@@ -21,3 +21,17 @@ test('public discovery remains readable offline from the explicit safe cache', a
   handlers.fetch({ request: { url: 'https://kairo.test/api/events', method: 'GET', mode: 'cors' }, respondWith(promise) { result = promise; } });
   assert.deepEqual(await (await result).json(), [{ id: 1 }]);
 });
+test('HTTP API errors are returned but never cached',async()=>{
+ const handlers={};let puts=0,result;
+ vm.runInNewContext(source,{self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},URL,Response,
+  caches:{open:async()=>({put:async()=>puts++,keys:async()=>[]})},fetch:async()=>Response.json({code:'DATABASE_ERROR'},{status:503})});
+ handlers.fetch({request:{url:'https://kairo.test/api/events',method:'GET',mode:'cors'},respondWith:promise=>result=promise,waitUntil(){throw Error('Errors cannot enter the cache');}});
+ assert.equal((await result).status,503);assert.equal(puts,0);
+});
+test('successful installation activates promptly and retires older cache versions',async()=>{
+ const handlers={};let skipped=0,claimed=0,deleted=[],pending;
+ vm.runInNewContext(source,{self:{addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>skipped++,clients:{claim:async()=>claimed++}},
+  caches:{open:async()=>({addAll:async()=>{}}),keys:async()=>['kairo-old','unrelated'],delete:async key=>deleted.push(key)}});
+ handlers.install({waitUntil:promise=>pending=promise});await pending;assert.equal(skipped,1);
+ handlers.activate({waitUntil:promise=>pending=promise});await pending;assert.equal(claimed,1);assert.deepEqual(deleted,['kairo-old']);
+});
