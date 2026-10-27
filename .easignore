@@ -1,0 +1,21 @@
+# EAS builds only the self-contained mobile project.
+/*
+!/app
+/app/node_modules
+/app/android
+/app/ios
+/app/build
+/app/.expo
+/app/dist
+/app/web-build
+/app/.env*
+!/app/.env.example
+/app/.DS_Store
+/app/**/*.jks
+/app/**/*.keystore
+/app/**/*.p8
+/app/**/*.p12
+/app/**/*.pem
+/app/**/*.key
+/app/**/*.mobileprovision
+/app/**/npm-debug.*
