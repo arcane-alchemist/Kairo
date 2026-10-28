@@ -1,9 +1,9 @@
-const CACHE = 'kairo-studio-v27';
-const APP_BUNDLE = '/app.js?v=27';
-const SHELL = ['/', '/index.html', APP_BUNDLE, '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
+const CACHE = 'kairo-studio-build';
+const BUILD_ASSETS = [];
+const SHELL = ['/', '/index.html', ...BUILD_ASSETS, '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
 const PUBLIC = ['/api/events', '/api/config'];
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL.map(path => new Request(new URL(path, self.location.origin), {cache: 'reload'})))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('kairo-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
@@ -11,7 +11,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request, url = new URL(request.url);
   // Cache only the app shell, explicitly public discovery, and content-addressed artwork. Never wallet lookups, sessions, claims, recipient links or organizer APIs.
-  const safe = url.pathname+url.search===APP_BUNDLE || !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|json)$/.test(url.pathname));
+  const safe = !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|json)$/.test(url.pathname));
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (!safe) {
     if (request.mode === 'navigate' && !url.pathname.startsWith('/api/')) event.respondWith(fetch(request).catch(() => caches.match('/offline.html')));
@@ -19,8 +19,13 @@ self.addEventListener('fetch', event => {
   }
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
+    const immutable = BUILD_ASSETS.includes(url.pathname) || url.pathname.startsWith('/media/');
+    if (immutable) {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    }
     try {
-      const response = await fetch(request);
+      const response = await fetch(request, immutable ? {} : {cache: 'no-cache'});
       if (response.ok) {
         const copy = response.clone();
         event.waitUntil((async () => {

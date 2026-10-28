@@ -11,9 +11,12 @@ import {ABI} from '../serverless/chain.js';
 import {metaMaskWallet} from './wallet.js';
 import {aboutContent,documentationContent,issuerContent,doodle} from './content.js';
 import {eventState, matchesEvent, profileStats, filterCollection, groupCollection} from './student-model.js';
+import {createPageLoader} from './page-loader.js';
 
 async function setup({hash = '', failure = false, events = [], ethereum, phantom, respond, Contract} = {}) {
-  const {document, window} = parseHTML(readFileSync(new URL('./index.html', import.meta.url), 'utf8'));
+  const {document, window} = parseHTML(readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8'));
+  Object.defineProperty(document, 'readyState', {value: 'complete'});
+  Object.defineProperty(window.HTMLImageElement.prototype, 'complete', {configurable: true, get: () => true});
   Object.defineProperty(window.HTMLElement.prototype, 'elements', {configurable: true, get() {return Object.fromEntries([...this.querySelectorAll('[name]')].map(node => [node.getAttribute('name'),node]));}});
   Object.defineProperty(window.HTMLSelectElement.prototype,'value',{configurable:true,get(){const option=this.querySelector('option[selected]')||this.querySelector('option');return option?(option.getAttribute('value')??option.textContent):'';},set(value){for(const option of this.querySelectorAll('option'))option.toggleAttribute('selected',(option.getAttribute('value')??option.textContent)===String(value));}});
   window.HTMLElement.prototype.requestSubmit = function(){this.onsubmit?.({preventDefault(){}});};
@@ -23,7 +26,7 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    QRCode:{toCanvas:async()=>{}}, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -48,6 +51,29 @@ test('API failure renders retry and never silently supplies fixtures', async () 
   assert.match(ui.document.querySelector('#live-app').textContent,/Live service unavailable/);
   assert.ok(ui.document.querySelector('#retry-api'));
   assert.equal(ui.document.querySelectorAll('.card').length,0);
+});
+
+test('refresh opens each URL directly and keeps the homepage hidden on subpages', async () => {
+  for (const hash of ['#events','#gallery','#organize','#about/proof','#builders/documentation','#admin/login']) {
+    const ui = await setup({hash});
+    assert.equal(ui.location.hash, hash);
+    assert([...ui.document.querySelectorAll('[data-home]')].every(node => node.hidden), hash);
+    assert.equal(ui.document.querySelector('#live-app').hidden, false, hash);
+    assert.equal(ui.document.querySelector('#page-loader').hidden, true, hash);
+  }
+});
+
+test('a slow session restore keeps the loader visible and renders the latest URL once ready', async () => {
+  let restore;
+  const ui = await setup({hash:'#events',respond:path=>path==='/api/auth/me'?new Promise(resolve=>{restore=resolve;}):undefined});
+  assert.equal(ui.document.querySelector('#page-loader').hidden,false);
+  assert(ui.document.documentElement.hasAttribute('data-page-loading'));
+  ui.location.hash='#builders/documentation'; await ui.render();
+  assert.equal(ui.document.querySelector('#page-loader').hidden,false);
+  restore({}); await new Promise(resolve=>setImmediate(resolve));
+  assert.match(ui.document.querySelector('#live-app').textContent,/GET \/api\/health/);
+  assert([...ui.document.querySelectorAll('[data-home]')].every(node=>node.hidden));
+  assert.equal(ui.document.querySelector('#page-loader').hidden,true);
 });
 
 

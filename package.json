@@ -6,7 +6,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "forge test && node --test serverless/*.test.js frontend/*.test.js scripts/smoke-local.test.js scripts/deploy.test.js",
+    "test": "npm run build && forge test && node --test serverless/*.test.js frontend/*.test.js scripts/smoke-local.test.js scripts/deploy.test.js",
+    "test:frontend": "npm run build && node --test frontend/*.test.js",
     "test:contracts": "forge test",
     "start": "npm run dev",
     "build": "node scripts/build-frontend.js",
@@ -33,7 +34,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "esbuild": "0.28.2",
+    "astro": "^7.4.2",
     "linkedom": "^0.18.14",
     "wrangler": "4.149.0"
   }

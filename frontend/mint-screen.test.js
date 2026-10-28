@@ -117,7 +117,7 @@ test('updateNetwork shows the active network and flags a mismatch and header pla
   assert.equal(node.hidden, false);
   assert.equal(node.textContent, 'Switch to Sepolia');
 
-  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
   const walletPos = html.indexOf('id="wallet"');
   const installPos = html.indexOf('id="install-app"');
   const networkPos = html.indexOf('id="wallet-network"');

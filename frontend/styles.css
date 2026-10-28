@@ -570,3 +570,21 @@ html[data-native="android"] #install-app, html[data-native="android"] a[href^="h
 
 .gallery-badge-entry {display:flex;flex-direction:column;gap:12px;min-width:0;}
 .gallery-badge-entry>.button {width:100%;}
+
+/* The initial HTML is covered before JavaScript or route data can arrive. */
+html[data-page-loading]{overflow:hidden}
+html[data-page-loading] body>:not(#page-loader):not(script):not(style){visibility:hidden}
+.page-loader{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);color:var(--ink);padding:24px;text-align:center}
+.loader-doodle{width:min(200px,60vw);height:auto;overflow:visible}
+.page-loader p{font-size:15px;font-weight:550;letter-spacing:-.2px;margin:14px 0 0}
+.loader-paper{fill:var(--paper)}.loader-heart{fill:var(--peach)}.loader-spark{fill:var(--accent);transform-origin:100px 80px;animation:loader-twinkle 1.8s ease-in-out infinite}
+.loader-keepsake{transform-origin:100px 90px;animation:loader-float 2.4s ease-in-out infinite}
+.loader-shadow{fill:var(--ink);opacity:.1;transform-origin:100px 151px;animation:loader-breathe 2.4s ease-in-out infinite}
+.loader-trail{stroke-dasharray:100;animation:loader-draw 2.4s ease-in-out infinite alternate}
+.loader-retry{font-size:13px;text-decoration:underline;min-height:44px;display:flex;align-items:center;margin-top:24px;background:transparent;visibility:hidden;animation:loader-retry 0s 15s forwards}
+@keyframes loader-float{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-9px) rotate(4deg)}}
+@keyframes loader-breathe{50%{transform:scaleX(.75);opacity:.06}}
+@keyframes loader-twinkle{50%{transform:scale(.9);opacity:.45}}
+@keyframes loader-draw{from{stroke-dashoffset:90}to{stroke-dashoffset:0}}
+@keyframes loader-retry{to{visibility:visible}}
+@media(prefers-reduced-motion:reduce){.loader-doodle *{animation:none!important}}

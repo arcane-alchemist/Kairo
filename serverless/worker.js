@@ -246,7 +246,9 @@ export default {
     const response = await createHandler()(request, env);
     const headers = new Headers(response.headers);
     for (const [name,value] of Object.entries(PAGE_HEADERS)) if (!headers.has(name)) headers.set(name,value);
-    if (new URL(request.url).pathname.startsWith('/api/')) headers.set('Cache-Control', 'no-store');
+    if (url.pathname.startsWith('/api/')) headers.set('Cache-Control', 'no-store');
+    else if (url.pathname.startsWith('/_astro/') && response.ok) headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    else if (!url.pathname.startsWith('/media/')) headers.set('Cache-Control', 'no-cache');
     return new Response(response.body, { status: response.status, headers });
     } catch (error) { return errorResponse(error,request,env); }
   }

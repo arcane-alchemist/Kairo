@@ -1,0 +1,30 @@
+---
+import PageLoader from '../components/PageLoader.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+---
+<!doctype html>
+<html lang="en" data-page-loading>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e7ddf6" />
+    <meta name="description" content="Life happens. Keep a little piece of it. Discover a playful world of digital collectibles with POAP." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Outfit:wght@500;600;650;700;750;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css">
+    <title>Kairo — Keep your moments</title>
+  </head>
+  <body>
+    <PageLoader />
+    <SiteHeader />
+    <main id="main"><slot /></main>
+    <SiteFooter />
+    <dialog id="modal" class="modal" aria-label="Kairo details"><button type="button" class="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
+    <div id="toast" class="toast" role="status"></div>
+    <script>import "../app.js";</script>
+  </body>
+</html>

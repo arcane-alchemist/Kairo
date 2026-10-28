@@ -2,6 +2,14 @@
 
 A MetaMask-only POAP platform on Sepolia. The website and API run on Cloudflare Workers, with D1, R2 and one alarm-driven Durable Object for serialized relayer transactions. There is no always-running backend, email provider, paid badge-generation service, sample-event mode, or alternative blockchain.
 
+## Website (Astro)
+
+Astro builds the website into `dist/`, which the existing Cloudflare Worker serves alongside `/api/` and `/media/`. `frontend/pages/index.astro` uses `frontend/layouts/SiteLayout.astro` and the components in `frontend/components/`. The current styling, Three.js medal, Anatomy memory press, wallet flows and hash URLs are preserved. The Expo app in `app/` continues to use the same website and API.
+
+`npm run build` renders the Astro pages, bundles the browser application into content-hashed chunks and generates the service worker's exact asset list. Cache versions change with the rendered page, public files, service worker or generated bundles. HTML, stylesheets and other unversioned files revalidate online; content-hashed bundles and artwork reuse the cache. Installation refreshes the offline shell, activation removes older Kairo caches, and artwork storage is capped at 60 entries. Only the app shell, public discovery and content-addressed artwork enter the offline cache; private wallet and staff responses remain excluded.
+
+Use `npm run dev` for the complete local site and API at `http://localhost:8787`. Run `npm run test:frontend` for the browser application tests against Astro's generated HTML, or `npm test` for the full contract and application checks. Build before running individual frontend tests directly. The shared doodle loader covers startup and page navigation until data, fonts, images and home scene assets settle; videos wait for a playable first frame. Refresh and the loader's recovery button retain the current hash URL.
+
 ## Accounts and publishing
 
 `SUPER_ADMIN_ADDRESS` is the public wallet address in local `.env` (deployment), `.dev.vars` (local Worker), and the Cloudflare Worker secret. The server checks the current on-chain admin before granting panel access. The superadmin can add or revoke panel wallets from **Admin → Activity → Panel access** using MetaMask; delegates sign in with their own wallets and can review requests and manage events, but cannot grant access to others. The superadmin role itself transfers through `proposeSuperAdmin(newAddress)` and `acceptSuperAdmin()`; update the Worker secret and local environment after acceptance. The deployer and relayer do not receive admin panel rights.
@@ -30,6 +38,8 @@ Participants can request a POAP from the event details after signing in and cons
 Each role dashboard shows links issued/used, QR claims, minted/pending/failed, cap remaining, paginated transactions and recipient rows, failed-mint retry, and transaction CSV export. Gallery shows only confirmed, ownership-verified POAPs with their original uploaded/generated artwork and Add to MetaMask controls. It refreshes automatically and offers manual refresh. Request status remains on each event's details page and in the private request API. Mint success shows the badge and Etherscan link from `EXPLORER_URL`.
 
 ## Local setup (real Sepolia)
+
+Credential locations: `.dev.vars` stores local Worker secrets, including `ISSUER_PRIVATE_KEY` and `QR_HMAC_SECRET`; `.env` stores the deployment/RPC configuration, including `SEPOLIA_RPC_URL` (which may contain a provider API key). Production runtime credentials live in Cloudflare Worker secrets, uploaded by `scripts/upload-runtime-secrets.js`. Cloudflare CLI authentication is stored outside this repository at `~/Library/Preferences/.wrangler/config/default.toml`. The mobile app's `EXPO_PUBLIC_API_URL` is a public website URL, never a secret. Do not put private API keys in `EXPO_PUBLIC_*` variables.
 
 Install Node 24+, Foundry for contract compilation/tests, and npm dependencies:
 

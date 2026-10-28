@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import vm from 'node:vm';
-const source = readFileSync(new URL('./sw.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../dist/sw.js', import.meta.url), 'utf8');
 test('offline cache excludes wallet, session, ticket and staff data, even with query strings', () => {
   const handlers = {};
   vm.runInNewContext(source, { self: { location: { origin: 'https://kairo.test' }, addEventListener: (name, fn) => { handlers[name] = fn; } }, URL });
@@ -30,18 +30,51 @@ test('HTTP API errors are returned but never cached',async()=>{
 });
 test('successful installation activates promptly and retires older cache versions',async()=>{
  const handlers={};let skipped=0,claimed=0,deleted=[],pending;
- vm.runInNewContext(source,{self:{addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>skipped++,clients:{claim:async()=>claimed++}},
+ vm.runInNewContext(source,{Request,URL,self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>skipped++,clients:{claim:async()=>claimed++}},
   caches:{open:async()=>({addAll:async()=>{}}),keys:async()=>['kairo-old','unrelated'],delete:async key=>deleted.push(key)}});
  handlers.install({waitUntil:promise=>pending=promise});await pending;assert.equal(skipped,1);
  handlers.activate({waitUntil:promise=>pending=promise});await pending;assert.equal(claimed,1);assert.deepEqual(deleted,['kairo-old']);
 });
 
-test('versioned application bundle bypasses stale script cache and remains available offline',async()=>{
- const bundle=readFileSync(new URL('./index.html',import.meta.url),'utf8').match(/src="(\/app\.js\?v=\d+)"/)[1];
+test('Astro hashed application bundle remains available offline from its explicit cache entry',async()=>{
+ const bundle=readFileSync(new URL('../dist/index.html',import.meta.url),'utf8').match(/<script[^>]*src="(\/_astro\/[^"?]+\.js)"/)[1];
  const handlers={};let result;
  vm.runInNewContext(source,{self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},URL,Response,
   caches:{open:async()=>({match:async key=>{assert.equal(key.url,'https://kairo.test'+bundle);return new Response('valid cached bundle');}})},fetch:async()=>{throw Error('Offline');}});
  handlers.fetch({request:{url:'https://kairo.test'+bundle,method:'GET',mode:'cors'},respondWith:promise=>result=promise});
  assert.equal(await(await result).text(),'valid cached bundle');
- assert(source.includes(`const APP_BUNDLE = '${bundle}'`));
+ assert(source.includes(JSON.stringify(bundle)));
+});
+
+test('installation caches every Astro chunk, including lazy wallet imports', async () => {
+ const handlers = {}; let pending, shell;
+ vm.runInNewContext(source, {Request,URL,self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>{}},
+  caches:{open:async()=>({addAll:async assets=>{assert(assets.every(request=>request.cache==='reload'));shell=assets.map(request=>new URL(request.url).pathname);}})}});
+ handlers.install({waitUntil:promise=>pending=promise}); await pending;
+ const directory = new URL('../dist/_astro/', import.meta.url);
+ for (const file of readdirSync(directory, {recursive:true}).filter(file=>statSync(new URL(file,directory)).isFile())) {
+  assert(shell.includes(`/_astro/${file}`), `Missing offline chunk: ${file}`);
+ }
+ const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
+ for (const [,asset] of html.matchAll(/(?:src|href)="(\/_astro\/[^"]+)"/g)) assert(shell.includes(asset), asset);
+ assert(!shell.includes('/app.js?v=28'));
+});
+
+test('HTML, CSS and public discovery revalidate online instead of returning a stale cached copy', async () => {
+ for (const path of ['/', '/styles.css', '/api/events']) {
+  const handlers = {}; let pending, background, fetched = false;
+  vm.runInNewContext(source, {URL,Response,self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},
+   caches:{open:async()=>({match:async()=>new Response('stale'),put:async()=>{},keys:async()=>[]})},
+   fetch:async(request,options)=>{fetched=true;assert.equal(options.cache,'no-cache');return new Response('fresh');}});
+  handlers.fetch({request:{url:'https://kairo.test'+path,method:'GET',mode:path==='/'?'navigate':'cors'},respondWith:value=>pending=value,waitUntil:value=>background=value});
+  assert.equal(await(await pending).text(),'fresh');assert(fetched);await background;
+ }
+});
+
+test('immutable artwork is served from cache without a network request', async () => {
+ const handlers = {}; let pending;
+ vm.runInNewContext(source, {URL,Response,self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},
+  caches:{open:async()=>({match:async()=>new Response('<svg/>')})},fetch:async()=>assert.fail('Cached immutable artwork should not fetch again')});
+ handlers.fetch({request:{url:'https://kairo.test/media/art/'+'a'.repeat(64)+'.svg',method:'GET',mode:'cors'},respondWith:value=>pending=value});
+ assert.equal(await(await pending).text(),'<svg/>');
 });

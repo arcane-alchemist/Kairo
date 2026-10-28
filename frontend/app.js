@@ -10,6 +10,7 @@ import { mountPress } from './press.js';
 import { mountNative } from './native.js';
 import { metaMaskWallet } from './wallet.js';
 import { aboutContent, documentationContent, issuerContent, doodle } from './content.js';
+import { createPageLoader } from './page-loader.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const all = (selector, parent = document) => [...parent.querySelectorAll(selector)];
@@ -20,6 +21,9 @@ document.querySelector('main').append(main);
 const entryDrop = claimEntry(new URL(location.href));
 const modal = document.querySelector('#modal');
 const modalBody = document.querySelector('#modal-body');
+const pageLoader = createPageLoader(document, window);
+pageLoader.begin();
+let initialized = false;
 
 let connectedWallet = '', activeChain = '', collectionRequest = 0;
 let events = [], config = {}, session = null, renderId = 0;
@@ -692,6 +696,13 @@ function createEventPage() {
 
 function about() { main.innerHTML = aboutContent(location.hash); }
 async function render() {
+  if (!initialized) return;
+  const ticket = pageLoader.begin();
+  try { await renderPage(); }
+  catch (error) { retryNotice(error, render); }
+  finally { await pageLoader.finish(ticket, !location.hash || ['#main','#collectibles','#how-it-works'].includes(location.hash) ? [homeAssets] : []); }
+}
+async function renderPage() {
   clearInterval(pageTimer); clearTimeout(ticketTimer); ticketView++; drawEvents = null; close();
   const version = ++renderId;
   const hash = location.hash.slice(1);
@@ -771,6 +782,7 @@ async function init() {
 
   } catch (error) { apiError = error.message; }
   if (entryDrop && !location.hash) history.replaceState(null, '', `#drop/${entryDrop}`);
+  initialized = true;
   await render();
 }
 
@@ -832,9 +844,10 @@ let installPrompt;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; document.querySelector('#install-app').hidden = false; });
 document.querySelector('#install-app')?.addEventListener('click', async () => { await installPrompt?.prompt(); document.querySelector('#install-app').hidden = true; installPrompt = null; });
 
-init();
-
 $('.coin-fallback').innerHTML = badgeSvg('flower', 'fallback', 'GOOD TIMES GROW HERE');
-mountCoin($('#coin-stage'), $('#spin-coin'), $('#pause-motion'));
-mountPress($('#press-art'), $('#press-button'), $('#press-readout'));
+const homeAssets = Promise.allSettled([
+  mountCoin($('#coin-stage'), $('#spin-coin'), $('#pause-motion')),
+  Promise.resolve().then(() => mountPress($('#press-art'), $('#press-button'), $('#press-readout')))
+]);
+init();
 document.addEventListener('poap-motion', event => { $('#pause-motion').setAttribute('aria-pressed', String(event.detail)); $('#pause-motion').setAttribute('aria-label', event.detail ? 'Resume animations' : 'Pause animations'); });

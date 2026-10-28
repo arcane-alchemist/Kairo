@@ -8,3 +8,4 @@ data/
 .dev.vars
 .wrangler/
 dist/
+.astro/

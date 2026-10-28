@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {parseHTML} from 'linkedom';
 import {readFileSync} from 'node:fs';
 test('desktop and phone navigation share five destinations and one header wallet control',()=>{
- const {document}=parseHTML(readFileSync(new URL('./index.html',import.meta.url),'utf8'));
+ const {document}=parseHTML(readFileSync(new URL('../dist/index.html',import.meta.url),'utf8'));
  for(const selector of ['.desktop-nav','#mobile-nav']) {
   const links=[...document.querySelectorAll(`${selector} a`)];
   assert.deepEqual(links.map(a=>a.textContent),['Events','Gallery','Create','About','Builders']);
