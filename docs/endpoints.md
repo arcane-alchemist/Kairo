@@ -103,6 +103,8 @@ Event moderation applies to all role drops in the event group. Editing listing d
 | GET | `/api/claims/{claimId}` | Read mint status, destination, token, errors and transaction | Claim wallet, event organizer or superadmin |
 | POST | `/api/claims/{claimId}/retry` | Retry a failed mint if window, supply and link authorization allow | Event organizer or superadmin; ADMIN claims require superadmin |
 
+My Gallery now includes **Add to MetaMask** beside each confirmed, ownership-verified badge and in its details. It validates the single receiving account, switches to the configured Sepolia network when approved, and calls `wallet_watchAsset` with `type: ERC721` plus that badge’s original contract and token ID. It sends no mint or transfer transaction. MetaMask must approve the display request; unsupported versions/mobile retain the manual copy controls.
+
 Every participant can see their own token IDs in Gallery and confirmed request statuses. Opening a Gallery badge shows its actual NFT contract address, token ID, network and separate copy buttons for manual MetaMask NFT import. Older badges retain their original contract address; do not substitute the current contract for archived badges.
 
 ## Gallery APIs
@@ -114,6 +116,8 @@ Every participant can see their own token IDs in Gallery and confirmed request s
 
 ## Important behavior
 
+- Kairo accepts exactly one MetaMask account per connection. Switching accounts ends the current SIWE session and revokes the old wallet connection before requesting the replacement. If multiple accounts are approved or exposed by an account-change event, Kairo requires the user to reconnect with exactly one account. MetaMask controls its account-selection UI.
+- Raw metadata navigation links are omitted from badge details; immutable NFT metadata remains available to the contract and Gallery.
 - Creating an event makes the wallet its organizer. Global superadmin access stays tied to `SUPER_ADMIN_ADDRESS`; creators do not automatically gain access to other events.
 - Mutations use JSON POST requests, a matching request Origin and, where required, the SIWE session cookie. API access checks are enforced on the server.
 - Queueing a publication/mint normally returns HTTP 202; this is not confirmation that an NFT already exists. Follow publication/claim/transaction status until confirmed.

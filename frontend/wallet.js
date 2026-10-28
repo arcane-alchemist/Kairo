@@ -49,23 +49,27 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
       pending = true; detach();
       try {
         let accounts, approved = entry;
+        async function request(input) {
+          let timer;
+          try {
+            return await Promise.race([approved.provider.request(input),new Promise((resolve,reject)=>{
+              timer=(win.setTimeout || setTimeout).call(win,()=>reject(Object.assign(Error('MetaMask is still waiting. Open MetaMask to finish or cancel the request, then try Connect wallet again.'),{code:'WALLET_TIMEOUT'})),90000);
+            })]);
+          } finally {(win.clearTimeout || clearTimeout).call(win,timer);}
+        }
         if (!entry?.provider) {
           mobile ||= await loadMobileWallet();
           ({accounts} = await mobile.connect()); approved = {...entry, provider:mobile.provider};
         } else {
-          async function request(input) {
-            let timer;
-            try {
-              return await Promise.race([entry.provider.request(input),new Promise((resolve,reject)=>{
-                timer=(win.setTimeout || setTimeout).call(win,()=>reject(Object.assign(Error('MetaMask is still waiting. Open MetaMask to finish or cancel the request, then try Connect wallet again.'),{code:'WALLET_TIMEOUT'})),90000);
-              })]);
-            } finally {(win.clearTimeout || clearTimeout).call(win,timer);}
-          }
           try { await request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]}); }
           catch (error) { if (![4200,-32601].includes(error.code)) throw error; }
           accounts = await request({method:'eth_requestAccounts'});
         }
-        if (!/^0x[\da-f]{40}$/i.test(accounts?.[0] || '')) throw Error('No Ethereum account was approved in your wallet.');
+        if (Array.isArray(accounts)&&accounts.length>1) {
+          try {await request({method:'wallet_revokePermissions',params:[{eth_accounts:{}}]});}catch{/* The connection stays detached if revocation is unsupported. */}
+          throw Error('Select exactly one account in MetaMask for this Kairo session, then connect again.');
+        }
+        if (!Array.isArray(accounts)||accounts.length!==1||!/^0x[\da-f]{40}$/i.test(accounts?.[0] || '')) throw Error('No Ethereum account was approved in your wallet.');
         attach(approved);
         try { win.localStorage?.setItem('kairo-wallet-provider',id); } catch { /* Connection works without browser storage. */ }
         return accounts[0];

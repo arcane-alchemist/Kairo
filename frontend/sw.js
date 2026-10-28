@@ -1,5 +1,5 @@
-const CACHE = 'kairo-studio-v20';
-const APP_BUNDLE = '/app.js?v=20';
+const CACHE = 'kairo-studio-v22';
+const APP_BUNDLE = '/app.js?v=22';
 const SHELL = ['/', '/index.html', APP_BUNDLE, '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
 const PUBLIC = ['/api/events', '/api/config'];
 self.addEventListener('install', event => {

@@ -479,17 +479,85 @@ test('superadmin publication completion opens its event request dashboard automa
 
 test('each participant sees their own token ID and can copy the actual NFT contract for MetaMask import',async()=>{
  for(const [wallet,tokenId,contractAddress] of [['0x1111111111111111111111111111111111111111','17','0x999524Cb77Db83864DA6FAC42614387921933922'],['0x2222222222222222222222222222222222222222','18','0x90a2920272dd3852193A79DA621B1Ccc9D093714']]) {
-  const item={id:7,tokenId,contractAddress,title:'Campus workshop',role:'Attendee',image:'https://kairo.test/media/art/badge.png',history:[],ownershipVerified:true};
+  const item={id:7,tokenId,contractAddress,uri:'https://dead.example/metadata.json',title:'Campus workshop',role:'Attendee',image:'https://kairo.test/media/art/badge.png',history:[],ownershipVerified:true};
   const ui=await setup({hash:'#gallery',respond:path=>{
    if(path==='/api/auth/me')return {wallet,admin:false};
    if(path.startsWith('/api/wallet-collection'))return {total:1,items:[item],pending:0,nextCursor:null};
   }});
   await new Promise(resolve=>setImmediate(resolve));assert.match(ui.document.querySelector('.gallery-badge-info').textContent,new RegExp('Token #'+tokenId));
   vm.runInContext('badgeDetails(collectionItems[0])',ui.context);
-  const details=ui.document.querySelector('#modal-body');assert.match(details.textContent,/NFT contract address/);assert(details.textContent.includes(contractAddress));assert(details.textContent.includes('Token ID: '+tokenId));
+  const details=ui.document.querySelector('#modal-body');assert.match(details.textContent,/NFT contract address/);assert(details.textContent.includes(contractAddress));assert(details.textContent.includes('Token ID: '+tokenId));assert.equal(details.querySelector('a[href="https://dead.example/metadata.json"]'),null);assert.equal(details.textContent.includes('View metadata'),false);
   let copied;ui.context.navigator.clipboard={writeText:async value=>{copied=value;}};
   const contractButton=details.querySelector('#copy-nft-contract');await contractButton.onclick({target:contractButton});assert.equal(copied,contractAddress);
   const tokenButton=details.querySelector('#copy-nft-token');await tokenButton.onclick({target:tokenButton});assert.equal(copied,tokenId);
   assert.equal(ui.requests.some(([path])=>path.startsWith('/api/admin/')),false);
+ }
+});
+
+test('switching accounts revokes old wallet access before selecting and signing one replacement',async()=>{
+ const first='0x1111111111111111111111111111111111111111',second='0x2222222222222222222222222222222222222222';
+ let authenticated=first,challengeWallet,revoked=false;const methods=[],listeners=new Map();
+ const provider={isMetaMask:true,on:(event,handler)=>listeners.set(event,handler),removeListener:event=>listeners.delete(event),request:async({method})=>{
+  methods.push(method);
+  if(method==='wallet_revokePermissions'){revoked=true;return null;}
+  if(method==='wallet_requestPermissions'){assert(revoked,'old account access must be revoked before requesting another account');return [];}
+  return ['eth_requestAccounts','eth_accounts'].includes(method)?[second]:method==='eth_chainId'?'0xaa36a7':[];
+ }};
+ const ui=await setup({ethereum:provider,respond:(path,options)=>{
+  if(path==='/api/auth/me')return authenticated?{wallet:authenticated,admin:authenticated===first}:new Response('{}',{status:401});
+  if(path==='/api/auth/logout'){authenticated='';return {};}
+  if(path==='/api/auth/challenge'){challengeWallet=JSON.parse(options.body).wallet;return {id:'challenge',message:'Sign in'};}
+  if(path==='/api/auth/verify'){authenticated=challengeWallet;return {wallet:authenticated};}
+ }});
+ await ui.document.querySelector('#wallet').onclick();const change=ui.document.querySelector('#wallet-change');await change.onclick({target:change});
+ assert.equal(authenticated,second);assert.equal(challengeWallet,second);assert.match(ui.document.querySelector('#wallet').textContent,/0x2222/);assert.equal(ui.document.querySelector('#admin-profile').hidden,true);
+ assert(methods.indexOf('wallet_revokePermissions')<methods.indexOf('wallet_requestPermissions'));
+});
+
+test('authorizing an additional account ends the existing session instead of keeping the first account active',async()=>{
+ const first='0x1111111111111111111111111111111111111111',second='0x2222222222222222222222222222222222222222',listeners=new Map();let authenticated=true;
+ const provider={isMetaMask:true,on:(event,handler)=>listeners.set(event,handler),removeListener:event=>listeners.delete(event),request:async()=>[]};
+ const ui=await setup({ethereum:provider,respond:path=>{
+  if(path==='/api/auth/me')return authenticated?{wallet:first,admin:true}:new Response('{}',{status:401});
+  if(path==='/api/auth/logout'){authenticated=false;return {};}
+ }});
+ await listeners.get('accountsChanged')([first,second]);
+ assert.equal(authenticated,false);assert.equal(ui.document.querySelector('#admin-profile').hidden,true);assert.match(ui.document.querySelector('#wallet').textContent,/Connect wallet/);
+ assert.equal(ui.requests.some(([path])=>path==='/api/auth/challenge'||path==='/api/auth/verify'),false);
+});
+
+test('My Gallery adds the existing NFT to MetaMask with its original contract and token, without minting',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',contractAddress='0x999524Cb77Db83864DA6FAC42614387921933922';
+ const item={id:7,tokenId:'17',contractAddress,title:'Soulbound POAP',role:'Attendee',history:[],ownershipVerified:true};let chain='0x1',watch;const methods=[];
+ const ui=await setup({hash:'#gallery',ethereum:{isMetaMask:true,request:async input=>{
+  methods.push(input.method);if(input.method==='eth_accounts')return [wallet];if(input.method==='eth_chainId')return chain;
+  if(input.method==='wallet_switchEthereumChain'){chain='0xaa36a7';return null;}
+  if(input.method==='wallet_watchAsset'){watch=input;return true;}return [];
+ }},respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[item]}:undefined});
+ await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(methods,[]);
+ const button=ui.document.querySelector('[data-add-nft]');assert(button);await button.onclick();
+ assert.deepEqual(JSON.parse(JSON.stringify(watch)),{method:'wallet_watchAsset',params:{type:'ERC721',options:{address:contractAddress,tokenId:'17'}}});
+ assert(methods.indexOf('wallet_switchEthereumChain')<methods.indexOf('wallet_watchAsset'));assert.match(ui.document.querySelector('#toast').textContent,/POAP added to MetaMask/);
+ assert.equal(methods.some(method=>['eth_sendTransaction','eth_sendRawTransaction','personal_sign'].includes(method)),false);
+ assert.equal(ui.requests.some(([,options])=>options?.method==='POST'),false);
+ vm.runInContext('badgeDetails(collectionItems[0])',ui.context);assert(ui.document.querySelector('#add-nft-metamask'));
+});
+
+test('MetaMask import validates the receiving account and handles unsupported wallets and cancellation',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',other='0x2222222222222222222222222222222222222222';
+ for(const scenario of ['wrong-account','multiple-accounts','changed-account','unsupported','cancelled']) {
+  let reads=0,watches=0;
+  const ui=await setup({hash:'#gallery',ethereum:{isMetaMask:true,request:async({method})=>{
+   if(method==='eth_chainId')return '0xaa36a7';
+   if(method==='eth_accounts'){reads++;return scenario==='wrong-account'?[other]:scenario==='multiple-accounts'?[wallet,other]:scenario==='changed-account'&&reads>1?[other]:[wallet];}
+   if(method==='wallet_watchAsset'){watches++;if(scenario==='unsupported')throw Object.assign(Error('Unsupported'),{code:4200});return false;}
+   return [];
+  }},respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[{id:7,tokenId:'18',contractAddress:'0x90a2920272dd3852193A79DA621B1Ccc9D093714',title:'POAP',role:'Attendee',history:[],ownershipVerified:true}]}:undefined});
+  await new Promise(resolve=>setImmediate(resolve));await ui.document.querySelector('[data-add-nft]').onclick();
+  assert.equal(watches,['unsupported','cancelled'].includes(scenario)?1:0,scenario);
+  assert.doesNotMatch(ui.document.querySelector('#toast').textContent,/POAP added to MetaMask/);
+  if(scenario==='unsupported')assert.match(ui.document.querySelector('#toast').textContent,/does not support one-click/);
+  if(scenario==='cancelled')assert.match(ui.document.querySelector('#toast').textContent,/cancelled/);
+  assert.equal(ui.document.querySelectorAll('.gallery-badge').length,1);
  }
 });

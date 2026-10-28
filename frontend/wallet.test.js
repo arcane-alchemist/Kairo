@@ -76,3 +76,11 @@ test('a stalled MetaMask prompt times out and late approval cannot silently conn
  approve([]);await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(mm.methods,['wallet_requestPermissions']);assert.throws(()=>wallet.provider,/Connect/);
 });
+
+test('multiple approved accounts are revoked and never attached as a Kairo connection',async()=>{
+ const second='0x2222222222222222222222222222222222222222';let accounts=[address,second];
+ const mm=provider({async request({method}){this.methods.push(method);if(method==='eth_requestAccounts')return accounts;return [];}}),wallet=metaMaskWallet(win(mm));
+ await assert.rejects(wallet.connect(),/exactly one account/);assert.throws(()=>wallet.provider,/Connect/);
+ assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_requestAccounts','wallet_revokePermissions']);
+ accounts=[second];assert.equal(await wallet.connect(),second);assert.equal(wallet.provider,mm);
+});

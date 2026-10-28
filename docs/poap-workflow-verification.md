@@ -62,3 +62,12 @@ The configured public Worker endpoints returned HTML rather than API JSON during
 4. In MetaMask, sign in as the configured admin and complete one intended request acceptance/direct mint to a verified recipient during its mint window. Confirm receipt and Gallery ownership. Use a controlled test event if verification should not consume an existing event's supply.
 
 Production here means the Sepolia-hosted application. Mainnet use is not implemented. Keep the relayer funded and the public RPC available; live chain finality and third-party service availability remain external dependencies.
+
+## Soulbound and one-click MetaMask follow-up
+
+- Added **Add to MetaMask** to My Gallery and owned badge details. The existing NFT’s contract/token ID are prefilled via `wallet_watchAsset`. Wrong or multiple accounts, account changes, unsupported wallets and cancellations are handled without minting or sending transactions.
+- The compiled contract already forbids approvals, all transfer variants and even internal burns, and advertises ERC-5192 `locked`. No contract change or redeployment was needed. A POAP cannot be sold/swapped through a mechanism that requires approval or transfer.
+- Read-only Sepolia verification matched current deployed runtime bytecode to the tested compiled contract, masking constructor immutables. Sample current token #16 and archived token #15 returned `locked=true`; owner-originated transfer, safe-transfer, approval, operator-approval and burn simulations all reverted. Ownership was unchanged and zero transactions were sent.
+- Latest checks: 18 Solidity tests, 144 JavaScript tests, production build and diff checks passed. Wallet-RPC tests verify exact original contract/token arguments and that the button sends no mint, signature or transaction request.
+- Kairo cannot control whether MetaMask renders its own Send/Swap buttons enabled. The enforceable protection is the on-chain rejection of ownership changes. MetaMask documents one-click NFT import as experimental and extension-only; manual copy/import remains available on unsupported/mobile clients. See https://docs.metamask.io/metamask-connect/evm/guides/metamask-exclusive/display-tokens/.
+- Live import confirmation was not performed: the browser’s Gallery was signed out during inspection. No wallet permission or confirmation was accepted on the user’s behalf.
