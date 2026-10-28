@@ -1,5 +1,6 @@
-const CACHE = 'kairo-recovery-v13';
-const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
+const CACHE = 'kairo-studio-v20';
+const APP_BUNDLE = '/app.js?v=20';
+const SHELL = ['/', '/index.html', APP_BUNDLE, '/styles.css', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/offline.html'];
 const PUBLIC = ['/api/events', '/api/config'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -9,8 +10,8 @@ self.addEventListener('activate', event => {
 });
 self.addEventListener('fetch', event => {
   const request = event.request, url = new URL(request.url);
-  // Cache only the app shell, explicitly public discovery, and content-addressed artwork. Never wallet lookups, sessions, tickets or staff APIs.
-  const safe = !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|json)$/.test(url.pathname));
+  // Cache only the app shell, explicitly public discovery, and content-addressed artwork. Never wallet lookups, sessions, claims, recipient links or organizer APIs.
+  const safe = url.pathname+url.search===APP_BUNDLE || !url.search && (SHELL.includes(url.pathname) || PUBLIC.includes(url.pathname) || /^\/media\/(art|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|json)$/.test(url.pathname));
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (!safe) {
     if (request.mode === 'navigate' && !url.pathname.startsWith('/api/')) event.respondWith(fetch(request).catch(() => caches.match('/offline.html')));

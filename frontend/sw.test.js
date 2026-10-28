@@ -35,3 +35,13 @@ test('successful installation activates promptly and retires older cache version
  handlers.install({waitUntil:promise=>pending=promise});await pending;assert.equal(skipped,1);
  handlers.activate({waitUntil:promise=>pending=promise});await pending;assert.equal(claimed,1);assert.deepEqual(deleted,['kairo-old']);
 });
+
+test('versioned application bundle bypasses stale script cache and remains available offline',async()=>{
+ const bundle=readFileSync(new URL('./index.html',import.meta.url),'utf8').match(/src="(\/app\.js\?v=\d+)"/)[1];
+ const handlers={};let result;
+ vm.runInNewContext(source,{self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},URL,Response,
+  caches:{open:async()=>({match:async key=>{assert.equal(key.url,'https://kairo.test'+bundle);return new Response('valid cached bundle');}})},fetch:async()=>{throw Error('Offline');}});
+ handlers.fetch({request:{url:'https://kairo.test'+bundle,method:'GET',mode:'cors'},respondWith:promise=>result=promise});
+ assert.equal(await(await result).text(),'valid cached bundle');
+ assert(source.includes(`const APP_BUNDLE = '${bundle}'`));
+});

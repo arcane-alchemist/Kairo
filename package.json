@@ -6,27 +6,28 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "forge test && node --test backend/*.test.js serverless/*.test.js frontend/*.test.js scripts/smoke-local.test.js",
+    "test": "forge test && node --test serverless/*.test.js frontend/*.test.js scripts/smoke-local.test.js scripts/deploy.test.js",
     "test:contracts": "forge test",
     "start": "npm run dev",
-    "start:legacy": "node --env-file=.env backend/server.js",
     "build": "node scripts/build-frontend.js",
     "dev": "npm run build && npm run db:local && wrangler dev",
     "db:local": "wrangler d1 migrations apply kairo --local",
-    "deploy:app": "npm run build && wrangler deploy",
+    "db:remote": "wrangler d1 migrations apply kairo --remote",
+    "deploy:app": "npm run build && npm run db:remote && wrangler deploy",
+    "test:workflow": "forge build && node scripts/verify-workflow.js",
     "preflight:app": "node scripts/preflight-app.js",
     "secrets:app": "node scripts/upload-runtime-secrets.js",
     "deploy:sepolia": "node --env-file=.env scripts/deploy.js",
-    "smoke:sepolia": "node --env-file=.env scripts/smoke-sepolia.js",
     "deploy:pages": "npm run build && node scripts/deploy-pages.js",
-    "smoke:local": "node scripts/smoke-local.js"
+    "smoke:local": "node scripts/smoke-local.js",
+    "verify:sepolia": "node scripts/verify-sepolia.js",
+    "verify:media": "node scripts/verify-media.js",
+    "verify:local": "node scripts/verify-local-app.js"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",
     "@openzeppelin/contracts": "^5.0.2",
     "ethers": "6.17.0",
-    "express": "5.3.0",
-    "jsqr": "1.4.0",
     "qrcode": "1.5.4",
     "three": "^0.186.1",
     "zod": "^4.6.7"

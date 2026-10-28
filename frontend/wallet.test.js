@@ -67,3 +67,12 @@ test('missing or rejected MetaMask never falls back to another wallet',async()=>
  const mm=provider({request:async()=>{throw Object.assign(Error('Declined'),{code:4001});}});window.ethereum={providers:[other,mm]};
  await assert.rejects(metaMaskWallet(window).connect(),{code:4001});assert.deepEqual(other.methods,[]);
 });
+
+test('a stalled MetaMask prompt times out and late approval cannot silently connect or read accounts',async()=>{
+ let expire,approve;const mm=provider({request({method}){this.methods.push(method);return new Promise(resolve=>{approve=resolve;});}}),window=win(mm);
+ window.setTimeout=fn=>{expire=fn;return 1;};window.clearTimeout=()=>{};
+ const wallet=metaMaskWallet(window),connection=wallet.connect();expire();
+ await assert.rejects(connection,{code:'WALLET_TIMEOUT'});assert.throws(()=>wallet.provider,/Connect/);
+ approve([]);await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(mm.methods,['wallet_requestPermissions']);assert.throws(()=>wallet.provider,/Connect/);
+});

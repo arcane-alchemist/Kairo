@@ -3,13 +3,16 @@ pragma solidity ^0.8.24;
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
-/// @notice Event configuration and staff-authorized attendance distribution.
+/// @notice Frozen role badges, sponsored publication and soulbound attendance minting.
 contract Kairo is ERC721, AccessControl {
+    address public immutable superAdmin;
+    address public immutable relayer;
     uint256 public nextTokenId = 1;
     mapping(uint256 => uint256) public eventFor;
     mapping(uint256 => address) public eventAdmin;
     mapping(uint256 => mapping(address => bool)) public eventIssuers;
     error UnauthorizedEvent();
+    event EventPauseUpdated(uint256 indexed eventId, bool paused);
     event EventIssuerUpdated(uint256 indexed eventId, address indexed issuer, bool allowed);
 
     struct EventData {
@@ -29,9 +32,29 @@ contract Kairo is ERC721, AccessControl {
     event EventCreated(uint256 indexed eventId, string uri);
     event AttendanceMinted(uint256 indexed eventId, address indexed attendee, uint256 tokenId);
 
-    constructor(address admin) ERC721("Kairo Attendance", "KAIRO") {
-        require(admin != address(0), "Zero authority");
+    constructor(address admin, address sponsor, address previous) ERC721("Kairo Attendance", "KAIRO") {
+        require(admin != address(0) && sponsor != address(0), "Zero authority");
+        superAdmin = admin; relayer = sponsor;
+        // Preserve global IDs so a replacement cannot collide with existing listings or badges.
+        if (previous != address(0)) {
+            nextEventId = Kairo(previous).nextEventId();
+            nextTokenId = Kairo(previous).nextTokenId();
+        }
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    // The constructor is the only place that can assign the permanent admin.
+    function grantRole(bytes32 role, address account) public override {
+        require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
+        super.grantRole(role, account);
+    }
+    function revokeRole(bytes32 role, address account) public override {
+        require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
+        super.revokeRole(role, account);
+    }
+    function renounceRole(bytes32 role, address account) public override {
+        require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
+        super.renounceRole(role, account);
     }
 
     function canMint(uint256 id, address issuer) public view returns (bool) {
@@ -47,7 +70,7 @@ contract Kairo is ERC721, AccessControl {
 
     function _checkEventAdmin(uint256 id) internal view {
         if (events[id].cap == 0) revert InvalidEvent();
-        if (msg.sender != eventAdmin[id] && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) revert UnauthorizedEvent();
+        if (msg.sender != relayer && msg.sender != superAdmin) revert UnauthorizedEvent();
     }
 
     function createEvent(
@@ -57,7 +80,8 @@ contract Kairo is ERC721, AccessControl {
         uint64 endsAt,
         address organizer,
         address issuer
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256 id) {
+    ) public returns (uint256 id) {
+        require(msg.sender == superAdmin || msg.sender == relayer, "Unauthorized publisher");
         if (
             organizer == address(0) || issuer == address(0) || bytes(uri).length == 0 || cap == 0 || startsAt >= endsAt
                 || endsAt <= block.timestamp
@@ -72,12 +96,26 @@ contract Kairo is ERC721, AccessControl {
         emit EventCreated(id, uri);
     }
 
-    function setEventPaused(uint256 id, bool paused) external {
-        _checkEventAdmin(id);
-        events[id].paused = paused;
+    struct NewEvent { string uri; uint64 cap; }
+    function createEvents(NewEvent[] calldata roles, uint64 startsAt, uint64 endsAt, address organizer) external {
+        require(roles.length > 0 && roles.length <= 8, "Invalid roles");
+        for (uint256 i; i < roles.length; ++i) {
+            createEvent(roles[i].uri, roles[i].cap, startsAt, endsAt, organizer, relayer);
+        }
     }
 
-    function mintAttendance(uint256 id, address attendee) external returns (uint256 tokenId) {
+    function setEventPaused(uint256 id, bool paused) public {
+        _checkEventAdmin(id);
+        events[id].paused = paused;
+        emit EventPauseUpdated(id, paused);
+    }
+
+    function setEventsPaused(uint256[] calldata ids, bool paused) external {
+        require(ids.length > 0 && ids.length <= 8, "Invalid event group");
+        for (uint256 i; i < ids.length; ++i) setEventPaused(ids[i], paused);
+    }
+
+    function mintAttendance(uint256 id, address attendee) public returns (uint256 tokenId) {
         EventData storage e = events[id];
         if (e.cap == 0) revert InvalidEvent();
         if (!canMint(id, msg.sender)) revert UnauthorizedEvent();
@@ -92,6 +130,11 @@ contract Kairo is ERC721, AccessControl {
         _safeMint(attendee, tokenId);
         emit Locked(tokenId);
         emit AttendanceMinted(id, attendee, tokenId);
+    }
+
+    function mintAttendanceBatch(uint256[] calldata ids, address[] calldata wallets) external {
+        require(ids.length > 0 && ids.length <= 20 && ids.length == wallets.length, "Invalid batch");
+        for (uint256 i; i < ids.length; ++i) mintAttendance(ids[i], wallets[i]);
     }
 
     error Soulbound();

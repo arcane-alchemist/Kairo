@@ -53,9 +53,17 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
           mobile ||= await loadMobileWallet();
           ({accounts} = await mobile.connect()); approved = {...entry, provider:mobile.provider};
         } else {
-          try { await entry.provider.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]}); }
+          async function request(input) {
+            let timer;
+            try {
+              return await Promise.race([entry.provider.request(input),new Promise((resolve,reject)=>{
+                timer=(win.setTimeout || setTimeout).call(win,()=>reject(Object.assign(Error('MetaMask is still waiting. Open MetaMask to finish or cancel the request, then try Connect wallet again.'),{code:'WALLET_TIMEOUT'})),90000);
+              })]);
+            } finally {(win.clearTimeout || clearTimeout).call(win,timer);}
+          }
+          try { await request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]}); }
           catch (error) { if (![4200,-32601].includes(error.code)) throw error; }
-          accounts = await entry.provider.request({method:'eth_requestAccounts'});
+          accounts = await request({method:'eth_requestAccounts'});
         }
         if (!/^0x[\da-f]{40}$/i.test(accounts?.[0] || '')) throw Error('No Ethereum account was approved in your wallet.');
         attach(approved);

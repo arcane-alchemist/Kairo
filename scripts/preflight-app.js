@@ -7,14 +7,15 @@ import { ABI } from '../serverless/chain.js';
 try {
   const config = JSON.parse(readFileSync('wrangler.jsonc'));
   const secrets = parseEnv(readFileSync('.dev.vars', 'utf8'));
-  assert(secrets.STUDENT_HASH_SECRET?.length >= 32, 'Hashing secret must be configured');
+  assert(secrets.QR_HMAC_SECRET?.length >= 32, 'QR signing secret must be configured');
   const issuer = new Wallet(secrets.ISSUER_PRIVATE_KEY);
   assert.equal(getAddress(config.vars.ISSUER_ADDRESS), issuer.address, 'Issuer key and public address differ');
-  const provider = new JsonRpcProvider(secrets.SEPOLIA_RPC_URL);
+  const provider = new JsonRpcProvider(secrets.SEPOLIA_RPC_URL || config.vars.PUBLIC_RPC_URL);
   assert.equal((await provider.getNetwork()).chainId, 11155111n, 'Sepolia required');
   assert.notEqual(await provider.getCode(config.vars.CONTRACT_ADDRESS), '0x', 'Contract is missing');
   const contract = new Contract(config.vars.CONTRACT_ADDRESS, ABI, provider);
-  await contract.DEFAULT_ADMIN_ROLE();
+  assert.equal((await contract.superAdmin()).toLowerCase(),config.vars.SUPER_ADMIN_ADDRESS.toLowerCase(),'Deploy the updated contract');
+  assert.equal((await contract.relayer()).toLowerCase(),issuer.address.toLowerCase(),'Contract relayer differs');
   const balance = await provider.getBalance(issuer.address);
   console.log(JSON.stringify({ contract: config.vars.CONTRACT_ADDRESS, issuer: issuer.address,
     balanceETH: formatEther(balance), funded: balance > 0n,

@@ -22,3 +22,14 @@ test('timeouts abort requests, and permanent configuration errors do not retry',
 test('a temporary failure recovers without changing cookie or same-origin behavior',async()=>{
  let count=0;const api=createApiClient({wait:async()=>{},fetchRequest:async(url,options)=>{assert.equal(url,'/api/events');assert.equal(options.credentials,'same-origin');return ++count===1?new Response('',{status:502}):Response.json([]);}});assert.deepEqual(await api('/events'),[]);assert.equal(count,2);
 });
+
+test('admin health may display a degraded dependency without forwarding internal options to fetch',async()=>{
+ let options;const request=createApiClient({fetchRequest:async(path,input)=>{options=input;return Response.json({status:'degraded',dependencies:{rpc:{status:'error',code:'CONTRACT_MISMATCH'}}},{status:503});}});
+ const health=await request('/health',{allowDegraded:true});assert.equal(health.dependencies.rpc.code,'CONTRACT_MISMATCH');assert.equal(options.allowDegraded,undefined);
+});
+
+test('publishing setup errors retain their actionable message and quiet is never sent to fetch',async()=>{
+ let sent;const request=createApiClient({fetchRequest:async(path,options)=>{sent=options;return Response.json({code:'RELAYER_MISMATCH',error:'Use the key matching the configured relayer.'},{status:503});},retryDelays:[]});
+ await assert.rejects(request('/organizer/events',{method:'POST',quiet:true}),error=>error.message==='Use the key matching the configured relayer.');
+ assert.equal(sent.quiet,undefined);
+});

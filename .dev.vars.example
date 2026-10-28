@@ -1,7 +1,8 @@
-SEPOLIA_RPC_URL=
+# Local Worker secrets only; public addresses and network settings are in wrangler.jsonc.
 ISSUER_PRIVATE_KEY=
-STUDENT_HASH_SECRET=
-ISSUER_ADDRESS=
+QR_HMAC_SECRET=
+# Optional dedicated Sepolia RPC; otherwise PUBLIC_RPC_URL is used.
+SEPOLIA_RPC_URL=
 
-# Local browser origin; production origin stays in deployment configuration.
-SITE_ORIGIN=http://localhost:8787
+# For local Sepolia publishing, use the public artwork bucket URL.
+MEDIA_BASE_URL=https://pub-51a8922866864bbd9a42197f6ab9a222.r2.dev/

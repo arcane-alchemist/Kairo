@@ -1,455 +1,389 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
-import { Wallet } from 'ethers';
-import { createHandler, digest } from './worker.js';
-import { mintNext } from './mint.js';
-
-function fixture() {
-  const sqlite = new DatabaseSync(':memory:'); sqlite.exec('PRAGMA foreign_keys=ON');
-  sqlite.exec(readFileSync('serverless/migrations/0001_initial.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0002_mint_history.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0003_event_schedule.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0004_qr_claims.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0005_linked_qr_claims.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0006_student_experience.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0007_organizer_studio.sql', 'utf8'));
-  sqlite.exec(readFileSync('serverless/migrations/0008_role_drops.sql', 'utf8'));
-  const DB = {
-    prepare(sql) {
-      let values = [];
-      const query = { bind(...args) { values = args; return query; },
-        async first() { return sqlite.prepare(sql).get(...values) || null; },
-        async run() { const result = sqlite.prepare(sql).run(...values); return { meta: { changes: result.changes } }; },
-        async all() { return { results: sqlite.prepare(sql).all(...values) }; } };
-      return query;
-    },
-    async batch(queries) {
-      sqlite.exec('BEGIN');
-      try { const results = []; for (const query of queries) results.push(await query.run()); sqlite.exec('COMMIT'); return results; }
-      catch (error) { sqlite.exec('ROLLBACK'); throw error; }
-    }
-  };
-  const admin = Wallet.createRandom(), staff = Wallet.createRandom(), outsider = Wallet.createRandom();
-  const now = Math.floor(Date.now()/1000);
-  sqlite.prepare('INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(1,'Test event','A campus event','Test Club','Technology','Hall A','https://kairo.test/media/art/test.png','ipfs://test',now-10,now+3600,now+1800,2,staff.address,now);
-  const env = { SITE_ORIGIN:'https://kairo.test',ISSUER_PRIVATE_KEY:admin.privateKey,ISSUER_ADDRESS:admin.address, CHAIN_ID:'11155111',CHAIN_NAME:'Sepolia',PUBLIC_RPC_URL:'https://ethereum-sepolia-rpc.publicnode.com',EXPLORER_URL:'https://sepolia.etherscan.io', DB, STUDENT_HASH_SECRET: 'a'.repeat(32), CONTRACT_ADDRESS: admin.address,
-    MEDIA: { async get() { return null; } }, ASSETS: { async fetch() { return new Response('asset'); } },
-    MINT: { idFromName() { return 'issuer'; }, get() { return { async fetch() { return Response.json({ queued: true }); } }; } } };
-  const chain = { async admin(wallet) { return wallet === admin.address; },
-    async staff(id, wallet) { return id === 1 && [admin.address,staff.address].includes(wallet); },
-    async event() { return { cap: 2n, startsAt: BigInt(now-10), endsAt: BigInt(now+3600), paused: false }; } };
-  const handler = createHandler(async () => chain);
-  const request = (path, data, cookie, origin = 'https://kairo.test') => handler(new Request(`https://kairo.test/api${path}`, {
-    method: data === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, ...(cookie ? { Cookie: cookie } : {}) },
-    ...(data === undefined ? {} : { body: JSON.stringify(data) })
-  }), env);
-  async function login(wallet) {
-    const challenge = await (await request('/auth/challenge', {})).json();
-    const verified = await request('/auth/verify', { id: challenge.id, signature: await wallet.signMessage(challenge.message) });
-    assert.equal(verified.status, 200);
-    return verified.headers.get('set-cookie').split(';')[0];
-  }
-  // Seed authenticated fixture sessions; SIWE signature/replay is tested separately.
-  async function register(path, input, origin) {
-    const token=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
-    const wallet=input.wallet;
-    sqlite.prepare('INSERT INTO sessions VALUES(?,?,?)').run(await digest(token),wallet,now+600);
-    return request(path,input,`kairo_session=${token}`,origin);
-  }
-  return {sqlite, DB, env, request, register, login, admin, staff, outsider, chain};
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync,readdirSync} from 'node:fs';
+import worker from './worker.js';
+import {fixture} from './test-fixture.js';
+import {qrToken,validQR,parseRecipients,csv} from './claims.js';
+import {mintNext,settleLinks} from './mint.js';
+import {actionNext} from './publish.js';
+async function issue(f,cookie,email='person@example.org') {
+ const response=await f.request('/events/1/links',{recipients:[{email,role:'Attendee'}]},cookie);assert.equal(response.status,201,await response.clone().text());
+ return (await response.json()).links[0];
 }
+const tokenOf=link=>link.link.split('/').at(-1);
 
-test('public RSVP validates consent and wallet, enforces capacity and duplicate student/wallet', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const wallet = Wallet.createRandom().address;
-  const rsvp = { studentId: 'STUDENT-1', wallet, permanentConsent: true };
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, permanentConsent: false })).status, 400);
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, wallet: 'bad' })).status, 400);
-  assert.equal((await f.register('/events/1/rsvp', rsvp, 'https://evil.test')).status, 403);
-  const result = await f.register('/events/1/rsvp', rsvp); assert.equal(result.status, 201);
-  const { ticket } = await result.json(); assert.match(ticket, /^[a-f0-9-]{36}$/);
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, studentId: ' student-1 ', wallet: Wallet.createRandom().address })).status, 409);
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, studentId: 'other' })).status, 409);
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, studentId: 'STUDENT-2', wallet: Wallet.createRandom().address })).status, 201);
-  assert.equal((await f.register('/events/1/rsvp', { ...rsvp, studentId: 'STUDENT-3', wallet: Wallet.createRandom().address })).status, 409);
-  const row = await (await f.request(`/tickets/${ticket}`)).json();
-  assert(!('student_hash' in row)); assert(!('studentId' in row));
-  assert(!JSON.stringify(f.sqlite.prepare('SELECT * FROM registrations').all()).includes('STUDENT-1'));
-});
-
-test('wallet challenge cannot replay and event staff access is isolated', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const challenge = await (await f.request('/auth/challenge', {})).json();
-  assert(!challenge.message.includes('Chain ID:'));
-  assert(!challenge.message.includes('Nonce:'));
-  assert(challenge.message.includes(challenge.id));
-  const signed = { id: challenge.id, signature: await f.staff.signMessage(challenge.message) };
-  const first = await f.request('/auth/verify', signed); assert.equal(first.status, 200);
-  assert.doesNotMatch(first.headers.get('set-cookie'), /Max-Age|Expires=/i);
-  const expires=f.sqlite.prepare('SELECT expires_at FROM sessions').get().expires_at;
-  assert(Math.abs(expires-Math.floor(Date.now()/1000)-600)<3);
-  assert.equal((await f.request('/auth/verify', signed)).status, 401);
-  const cookie = first.headers.get('set-cookie').split(';')[0];
-  assert.equal((await f.request('/events/1/attendees', undefined, cookie)).status, 200);
-  assert.equal((await f.request('/events/2/attendees', undefined, cookie)).status, 403);
-  assert.equal((await f.request('/events/1/attendees')).status, 401);
-  const outsider = await f.login(f.outsider);
-  assert.equal((await f.request('/events/1/attendees', undefined, outsider)).status, 403);
-});
-
-test('verified check-in records actor, remains idempotent, and queues a single mint', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const { ticket } = await (await f.register('/events/1/rsvp', { studentId: 'STUDENT', wallet: Wallet.createRandom().address, permanentConsent: true })).json();
-  const cookie = await f.login(f.staff);
-  assert.equal((await f.request(`/tickets/${ticket}/check-in`, {}, cookie)).status, 400);
-  assert.equal((await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' })).status, 401);
-  const outsider = await f.login(f.outsider);
-  assert.equal((await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' }, outsider)).status, 403);
-  assert.equal((await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'OTHER-STUDENT' }, cookie)).status, 409);
-  for (let i = 0; i < 2; i++) assert.equal((await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: ' student ' }, cookie)).status, 202);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n, 1);
-  assert.equal(f.sqlite.prepare('SELECT checked_in_by FROM registrations').get().checked_in_by, f.staff.address);
-});
-
-test('mint retry persists signed bytes and confirms without signing twice', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const { ticket } = await (await f.register('/events/1/rsvp', { studentId: 'STUDENT', wallet: Wallet.createRandom().address, permanentConsent: true })).json();
-  await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' }, await f.login(f.staff));
-  let signatures = 0, mined = false, broadcasts = 0;
-  const chain = { async token() { return mined ? '42' : '0'; },
-    async signMint() { signatures++; return { raw: 'signed', hash: 'hash' }; },
-    async receipt() { return mined ? { status: 1 } : null; },
-    async broadcast(raw) { assert.equal(raw, 'signed'); if (++broadcasts === 1) throw Error('RPC outage'); mined = true; } };
-  await mintNext(f.DB, chain);
-  assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status, 'submitted');
-  await mintNext(f.DB, chain);
-  assert.equal(signatures, 1);
-  assert.equal(f.sqlite.prepare('SELECT token_id FROM jobs').get().token_id, '42');
-  const collection = await (await f.request(`/collection?wallet=${f.sqlite.prepare('SELECT wallet FROM registrations').get().wallet}`)).json();
-  assert.equal(collection.length, 1); assert.equal(collection[0].tokenId, '42');
-});
-
-test('unsigned failures leave the queue after ten attempts, signed failures retain their nonce', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const { ticket } = await (await f.register('/events/1/rsvp', { studentId: 'STUDENT', wallet: Wallet.createRandom().address, permanentConsent: true })).json();
-  await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' }, await f.login(f.staff));
-  const chain = { async token() { return '0'; }, async signMint() { throw Error('insufficient funds'); } };
-  for (let i = 0; i < 10; i++) await mintNext(f.DB, chain);
-  assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status, 'failed');
-  f.sqlite.prepare("UPDATE jobs SET status='submitted',raw_tx='raw',tx_hash='hash'").run();
-  await mintNext(f.DB, { async receipt() { throw Error('RPC'); } });
-  assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status, 'submitted');
-});
-
-test('signed organizers can upload artwork; publishing requires admin, matches chain metadata and resumes idempotently', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const objects = new Map();
-  f.env.MEDIA = { async put(key, value) { objects.set(key, value); },
-    async get(key) { const value = objects.get(key); return value === undefined ? null : { async json() { return JSON.parse(value); } }; } };
-  const art = { name: 'Campus meetup', description: 'Meet the campus community',
-    image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXuoAAAAASUVORK5CYII=' };
-  assert.equal((await f.request('/artwork', art, await f.login(f.outsider))).status, 200);
-  const cookie = await f.login(f.admin);
-  assert.equal((await f.request('/artwork', { ...art, image: 'data:image/svg+xml;base64,AAAA' }, cookie)).status, 400);
-  const media = await (await f.request('/artwork', art, cookie)).json();
-  assert.match(media.uri, /^https:\/\/kairo\.test\/media\/metadata\/[a-f0-9]{64}\.json$/);
-  f.chain.event = async () => ({ uri: media.uri, cap: 100n, startsAt: BigInt(Math.floor(Date.now()/1000)), endsAt: BigInt(Math.floor(Date.now()/1000)+3600) });
-  f.chain.contract = { async eventAdmin() { return f.staff.address; } };
-  const details = { id: 2, title: art.name, description: art.description, club: 'Campus Club', category: 'Community', venue: 'Hall A',
-    rsvpDeadline: Math.floor(Date.now()/1000)+1800, ...media };
-  assert.equal((await f.request('/events', { ...details, title: 'Tampered' }, cookie)).status, 409);
-  assert.equal((await f.request('/events', { ...details, eventStartsAt: Number(await f.chain.event().then(e => e.startsAt))+1, eventEndsAt: Number(await f.chain.event().then(e => e.endsAt)) }, cookie)).status, 400);
-  assert.equal((await f.request('/events', details, cookie)).status, 201);
-  assert.equal(JSON.parse(objects.get(media.uri.split('/media/')[1])).image, media.image);
-  assert.equal((await f.request('/events', details, cookie)).status, 200);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM events WHERE id=2').get().n, 1);
-});
-
-test('failed jobs can retry but unresolved signed jobs cannot reset their nonce', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const { ticket } = await (await f.register('/events/1/rsvp', { studentId: 'STUDENT', wallet: Wallet.createRandom().address, permanentConsent: true })).json();
-  const cookie = await f.login(f.staff);
-  await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' }, cookie);
-  f.sqlite.prepare("UPDATE jobs SET status='submitted',raw_tx='signed',tx_hash='hash'").run();
-  assert.equal((await f.request(`/tickets/${ticket}/retry`, {}, cookie)).status, 409);
-  assert.equal(f.sqlite.prepare('SELECT raw_tx FROM jobs').get().raw_tx, 'signed');
-  f.sqlite.prepare("UPDATE jobs SET status='failed'").run();
-  assert.equal((await f.request(`/tickets/${ticket}/retry`, {}, await f.login(f.outsider))).status, 403);
-  assert.equal((await f.request(`/tickets/${ticket}/retry`, {}, cookie)).status, 202);
-  assert.equal(f.sqlite.prepare('SELECT raw_tx FROM jobs').get().raw_tx, null);
-});
-
-test('receipt from the original transaction resolves a replacement race', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const { ticket } = await (await f.register('/events/1/rsvp', { studentId: 'STUDENT', wallet: Wallet.createRandom().address, permanentConsent: true })).json();
-  await f.request(`/tickets/${ticket}/check-in`, { physicallyVerified: true, studentId: 'STUDENT' }, await f.login(f.staff));
-  await mintNext(f.DB, { async token() { return '0'; }, async signMint() { return { raw: 'raw', hash: 'old' }; }, async receipt() { return null; }, async broadcast() {} });
-  f.sqlite.prepare('UPDATE jobs SET updated_at=?').run(Math.floor(Date.now()/1000)-121);
-  await mintNext(f.DB, { async replace() { return { raw: 'newraw', hash: 'new' }; }, async receipt() { return null; }, async broadcast() {} });
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mint_transactions').get().n, 2);
-  await mintNext(f.DB, { async receipt(hash) { return hash === 'old' ? { status: 1 } : null; }, async token() { return '5'; } });
-  const job = f.sqlite.prepare('SELECT * FROM jobs').get();
-  assert.equal(job.status, 'confirmed'); assert.equal(job.tx_hash, 'old'); assert.equal(job.token_id, '5');
-});
-
-
-test('zero capacity permits unlimited RSVPs without bypassing duplicate checks', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  f.sqlite.prepare('UPDATE events SET cap=0 WHERE id=1').run();
-  for (let i=0; i<3; i++) assert.equal((await f.register('/events/1/rsvp', {studentId:'UNLIMITED-'+i, wallet:Wallet.createRandom().address, permanentConsent:true})).status, 201);
-  const events = await (await f.request('/events')).json();
-  assert.equal(events[0].cap, 0); assert.equal(events[0].remaining, null);
-});
-
-
-test('QR claims require wallet authentication and consent, honor cap/window, and do not fabricate attendance', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true})).status,401);
-  const cookie=await f.login(f.outsider);
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},cookie)).status,403);
-  f.sqlite.prepare("UPDATE events SET claim_mode='qr',rsvp_deadline=1,cap=1 WHERE id=1").run();
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:false},cookie)).status,400);
-  const first=await (await f.request('/events/1/claim',{permanentConsent:true},cookie)).json();assert(first.ticket);
-  const repeated=await (await f.request('/events/1/claim',{permanentConsent:true},cookie)).json();assert.equal(repeated.ticket,first.ticket);
-  const row=f.sqlite.prepare('SELECT * FROM registrations WHERE id=?').get(first.ticket);assert.equal(row.wallet,f.outsider.address);assert.equal(row.checked_in_at,null);assert(row.claimed_at);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM jobs').get().n,1);
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},await f.login(f.admin))).status,409);
-  f.chain.event=async()=>({cap:1n,startsAt:0n,endsAt:1n,paused:false});
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},cookie)).status,409);
-});
-
-test('linked QR drops reject a second claim across either drop and preserve retries', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());
-  f.sqlite.exec("UPDATE events SET claim_mode='qr' WHERE id=1; INSERT INTO events SELECT 2,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles,animation_url,group_id FROM events WHERE id=1");
-  const firstWallet=await f.login(f.outsider);
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},firstWallet)).status,202);
-  const blocked=await f.request('/events/2/claim',{permanentConsent:true},firstWallet);
-  assert.equal(blocked.status,409);assert.match((await blocked.json()).error,/already claimed/);
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},firstWallet)).status,202);
-  const secondWallet=await f.login(f.admin);
-  assert.equal((await f.request('/events/2/claim',{permanentConsent:true},secondWallet)).status,202);
-  assert.equal((await f.request('/events/1/claim',{permanentConsent:true},secondWallet)).status,409);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM jobs').get().n,2);
-});
-
-test('sign-in request and session last ten minutes with a readable replay-safe message', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());
-  f.env.SITE_ORIGIN='https://kairo-site-7fb.pages.dev';
-  const before=Math.floor(Date.now()/1000);
-  const challenge=await (await f.request('/auth/challenge',{})).json();
-  assert.match(challenge.message,/https:\/\/kairo-site-7fb.pages.dev/);
-  assert.match(challenge.message,/Valid for 10 minutes/);
-  assert(!/Nonce:|Chain ID:|organizer/.test(challenge.message));
-  assert(challenge.message.includes(challenge.id));
-  const expires=f.sqlite.prepare('SELECT expires_at FROM challenges WHERE id=?').get(challenge.id).expires_at;
-  assert(expires>=before+600 && expires<=Math.floor(Date.now()/1000)+600);
-  const signed={id:challenge.id,signature:await f.outsider.signMessage(challenge.message)};
-  const response=await f.request('/auth/verify',signed);
-  assert.equal(response.status,200);assert.doesNotMatch(response.headers.get('set-cookie'),/Max-Age|Expires=/i);
-  const cookie=response.headers.get('set-cookie').split(';')[0];
-  assert.equal((await f.request('/auth/verify',signed)).status,401);
-  f.sqlite.exec('UPDATE sessions SET expires_at=0');
-  assert.equal((await f.request('/auth/me',undefined,cookie)).status,401);
-});
-
-test('SIWE binds the signature to the requested wallet, Pages domain, Sepolia and expiration', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());f.env.SITE_ORIGIN='https://kairo-site-7fb.pages.dev';
-  const challenge=await(await f.request('/auth/challenge',{wallet:f.outsider.address})).json();
-  assert(challenge.message.startsWith(`kairo-site-7fb.pages.dev wants you to sign in with your Ethereum account:\n${f.outsider.address}\n`));
-  assert.match(challenge.message,/Version: 1\nChain ID: 11155111\nNonce: [a-zA-Z0-9]{32}\nIssued At:/);
-  assert(challenge.message.includes('Expiration Time:'));
-  assert.equal((await f.request('/auth/verify',{id:challenge.id,signature:await f.admin.signMessage(challenge.message)})).status,401);
-  const signed={id:challenge.id,signature:await f.outsider.signMessage(challenge.message)};
-  assert.equal((await f.request('/auth/verify',signed)).status,200);
-  assert.equal((await f.request('/auth/verify',signed)).status,401);
-});
-
-test('RSVP roles are validated and cancellation requires the owning signed-in wallet', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const input = { studentId: 'ID-ROLE', wallet: f.outsider.address, permanentConsent: true };
-  assert.equal((await f.register('/events/1/rsvp', { ...input, role: 'Speaker' })).status, 400);
-  const { ticket } = await (await f.register('/events/1/rsvp', input)).json();
-  assert.equal((await f.request(`/tickets/${ticket}/cancel`, {})).status, 401);
-  assert.equal((await f.request(`/tickets/${ticket}/cancel`, {}, await f.login(f.staff))).status, 409);
-  assert.equal((await f.request(`/tickets/${ticket}/cancel`, {}, await f.login(f.outsider))).status, 200);
-  assert.equal((await f.request(`/tickets/${ticket}`)).status, 404);
-  assert.equal((await f.register('/events/1/rsvp', input)).status, 201);
-});
-test('wallet collection includes on-chain tokens missing from the application database', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  f.chain.collectionPage = async () => ({ items: [{ id: 99, tokenId: '100', uri: 'ipfs://external', organizer: f.staff.address }], total: 1, nextCursor: null });
-  const result = await f.request(`/wallet-collection?wallet=${f.outsider.address}`);
-  assert.equal(result.status, 200);
-  const body = await result.json();
-  assert.equal(body.items[0].tokenId, '100'); assert.equal(body.items[0].ownershipVerified, true);
-  assert.equal(body.items[0].role, 'Unrecorded'); assert.equal(body.items[0].attendanceVerified, false);
-  assert.equal(body.items[0].metadataStatus, 'Unavailable · ownership verified');
-  assert.equal(body.total, 1); assert.equal(body.nextCursor, null);
-});
-
-test('missing artwork generates stored description-based SVG and immutable metadata', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const objects = new Map();
-  f.env.MEDIA = {
-    async put(key, value, options) { objects.set(key, {value, ...options}); },
-    async get(key) { const object = objects.get(key); return object && {body: object.value, httpMetadata: object.httpMetadata, async json() {return JSON.parse(object.value);} }; }
-  };
-  const details = {name: 'Campus Code Night', description: 'A coding hackathon with friends <script>alert(1)</script>'};
-  assert.equal((await f.request('/artwork', details)).status, 401);
-  assert.equal((await f.request('/artwork', details, await f.login(f.outsider))).status, 200);
-  const cookie = await f.login(f.admin);
-  assert.equal((await f.request('/artwork', {...details, description: ''}, cookie)).status, 400);
-  const result = await f.request('/artwork', details, cookie); assert.equal(result.status, 200);
-  const media = await result.json(); assert.match(media.image, /\/art\/[a-f0-9]{64}\.svg$/);
-  const art = objects.get(media.image.split('/media/')[1]);
-  const svg = new TextDecoder().decode(art.value);
-  assert.match(svg, /TECHNOLOGY/); assert.match(svg, /Campus Code Night/);
-  assert(!svg.includes('<script>')); assert.match(svg, /&lt;script&gt;/);
-  assert.equal(art.httpMetadata.contentType, 'image/svg+xml');
-  const metadata = JSON.parse(objects.get(media.uri.split('/media/')[1]).value);
-  assert.deepEqual(metadata, {...details, name: details.name, image: media.image});
-  const served = await createHandler()(new Request(media.image), f.env);
-  assert.equal(served.status, 200); assert.equal(await served.text(), svg);
-  assert.match(served.headers.get('cache-control'), /immutable/);
-  assert.deepEqual(await (await f.request('/artwork', details, cookie)).json(), media);
-});
-
-test('organizer drafts persist privately, submit to admin review and publish atomically', async t => {
-  const f = fixture(); t.after(() => f.sqlite.close());
-  const objects = new Map();
-  f.env.MEDIA = { async put(key,value,options) {objects.set(key,{value,...options});}, async get(key) {const object=objects.get(key);return object && {body:object.value,httpMetadata:object.httpMetadata,async json(){return JSON.parse(object.value);}};} };
-  const owner = await f.login(f.staff), outsider = await f.login(f.outsider), admin = await f.login(f.admin);
-  const media = await (await f.request('/artwork',{name:'A real campus workshop',description:'Learn coding with our campus community'},owner)).json();
-  const start=Math.floor(Date.now()/1000)+7200;
-  const details={organizer:f.outsider.address,title:'A real campus workshop',description:'Learn coding with our campus community',club:'Campus builders',category:'Workshop',venue:'Hall A',cap:50,eventStartsAt:start,eventEndsAt:start+3600,mintStartsAt:start,mintEndsAt:start+7200,rsvpDeadline:start-60,...media};
-  assert.equal((await f.request('/organizer/events',details)).status,401);
-  assert.equal((await f.request('/organizer/events',{...details,organizer:'javascript:alert(1)'},owner)).status,400);
-  assert.equal((await f.request('/organizer/events',{...details,organizer:'0x'+'0'.repeat(40)},owner)).status,400);
-  const save=await f.request('/organizer/events',{...details,organizer:f.outsider.address},owner);assert.equal(save.status,201);
-  const draft=await save.json();assert.equal(draft.status,'draft');
-  const mine=await (await f.request('/organizer/events',undefined,owner)).json();assert.equal(mine.length,1);assert.equal(mine[0].details.organizer,f.outsider.address);
-  assert.deepEqual(await (await f.request('/organizer/events',undefined,outsider)).json(),[]);
-  assert.equal((await f.request('/organizer/events',{...details,id:draft.id},outsider)).status,403);
-  assert.equal((await f.request('/organizer/events',{...details,title:'Changed without new metadata',id:draft.id},owner)).status,409);
-  assert.equal((await f.request('/organizer/events',{...details,id:draft.id,submit:true},owner)).status,200);
-  assert.equal((await f.request('/organizer/review',undefined,owner)).status,403);
-  assert.equal((await (await f.request('/organizer/review',undefined,admin)).json()).length,1);
-  assert.equal((await f.request('/events',{...details,id:2,draftId:draft.id},owner)).status,403);
-  f.chain.event=async()=>({uri:media.uri,cap:50n,startsAt:BigInt(start),endsAt:BigInt(start+7200)});
-  f.chain.contract={async eventAdmin(){return f.staff.address;}};
-  assert.equal((await f.request('/events',{...details,id:2,draftId:draft.id},admin)).status,409);
-  f.chain.contract={async eventAdmin(){return f.outsider.address;}};
-  const published=await f.request('/events',{...details,id:2,draftId:draft.id},admin);assert.equal(published.status,201);
-  assert.equal(f.sqlite.prepare('SELECT status,event_id FROM organizer_drafts WHERE id=?').get(draft.id).status,'published');
-  assert.equal((await f.request('/organizer/events',{...details,id:draft.id},owner)).status,409);
-  assert.equal((await f.request('/events',{...details,id:2,draftId:draft.id},admin)).status,200);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS count FROM events WHERE id=2').get().count,1);
-});
-
-test('video collectibles store validated animation metadata and retain a generated poster', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());const objects=new Map();
-  f.env.MEDIA={async put(key,value,options){objects.set(key,{value,...options});},async get(key){const object=objects.get(key);return object && {body:object.value,httpMetadata:object.httpMetadata,async json(){return JSON.parse(object.value);}};}};
-  const cookie=await f.login(f.staff),input={name:'Campus film night',description:'Art and music from our students'};
-  assert.equal((await f.request('/artwork',{...input,video:'data:video/mp4;base64,AAAA'},cookie)).status,400);
-  assert.equal((await f.request('/artwork',{...input,video:'data:text/html;base64,AAAA'},cookie)).status,400);
-  const bytes=Uint8Array.from([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0]);
-  const video='data:video/mp4;base64,'+Buffer.from(bytes).toString('base64');
-  const result=await f.request('/artwork',{...input,video},cookie);assert.equal(result.status,200);const media=await result.json();
-  assert.match(media.image,/\.svg$/);assert.match(media.animationUrl,/\/video\/[a-f0-9]{64}\.mp4$/);
-  const metadata=JSON.parse(objects.get(media.uri.split('/media/')[1]).value);assert.equal(metadata.animation_url,media.animationUrl);assert.equal(metadata.image,media.image);
-  const start=Math.floor(Date.now()/1000)+3600;
-  f.chain.event=async()=>({uri:media.uri,cap:5n,startsAt:BigInt(start),endsAt:BigInt(start+7200)});
-  f.chain.contract={async eventAdmin(){return f.staff.address;}};
-  const details={id:2,title:input.name,description:input.description,club:'Film club',category:'Arts',venue:'Hall A',rsvpDeadline:start-60,eventStartsAt:start,eventEndsAt:start+3600,...media};
-  assert.equal((await f.request('/events',details,await f.login(f.admin))).status,201);
-  const listing=(await (await f.request('/events')).json()).find(event=>event.id===2);assert.equal(listing.animationUrl,media.animationUrl);
-  f.chain.collectionPage=async()=>({total:1,items:[{id:2,tokenId:'2',uri:media.uri,organizer:f.staff.address}],nextCursor:null});
-  const collection=await (await f.request('/wallet-collection?wallet='+f.outsider.address)).json();assert.equal(collection.items[0].animationUrl,media.animationUrl);
-  const served=await createHandler()(new Request(media.animationUrl),f.env);assert.equal(served.headers.get('content-type'),'video/mp4');assert.deepEqual(new Uint8Array(await served.arrayBuffer()),bytes);
-});
-
-test('RSVP binds issuance to the SIWE wallet and rejects self-granted elevated roles',async t=>{
- const f=fixture();t.after(()=>f.sqlite.close());const input={studentId:'SECURE-ID',permanentConsent:true};
- assert.equal((await f.request('/events/1/rsvp',input)).status,401);
- const cookie=await f.login(f.outsider);
- assert.equal((await f.request('/events/1/rsvp',{...input,wallet:f.admin.address},cookie)).status,403);
- assert.equal((await f.request('/events/1/rsvp',{...input,role:'Winner'},cookie)).status,400);
- const response=await f.request('/events/1/rsvp',input,cookie);assert.equal(response.status,201);
- assert.equal((await response.json()).wallet,f.outsider.address);
- assert.equal(f.sqlite.prepare('SELECT wallet FROM registrations').get().wallet,f.outsider.address);
-});
-test('runtime network and event categories are exposed without private RPC credentials',async t=>{
- const f=fixture();t.after(()=>f.sqlite.close());f.env.SEPOLIA_RPC_URL='https://private.test/secret';
- const response=await f.request('/config'),config=await response.json();assert.equal(response.status,200);
- assert.equal(config.chainId,11155111);assert(config.categories.includes('Workshop'));assert.equal(config.walletNetwork.chainId,'0xaa36a7');
- assert(!JSON.stringify(config).includes('private.test'));
- delete f.env.CHAIN_ID;assert.equal((await f.request('/config')).status,503);
-});
-
-test('proof provenance requires a verifier actor and never infers presence from QR consent',async t=>{
+test('only configured SIWE wallet is admin even when the chain grants another wallet rights',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());
- const {ticket}=await (await f.register('/events/1/rsvp',{studentId:'PROOF-ID',wallet:f.outsider.address,permanentConsent:true})).json();
- f.chain.collectionPage=async()=>({total:1,nextCursor:null,items:[{id:1,tokenId:'1',uri:'ipfs://test',organizer:f.staff.address}]});
- const proof=async()=> (await (await f.request('/wallet-collection?wallet='+f.outsider.address)).json()).items[0];
- f.sqlite.prepare('UPDATE registrations SET checked_in_at=?,checked_in_by=? WHERE id=?').run(1,f.staff.address,ticket);
- assert.equal((await proof()).claimMethod,'verifier-check-in');assert.equal((await proof()).attendanceVerified,true);
- f.sqlite.prepare('UPDATE registrations SET checked_in_by=NULL WHERE id=?').run(ticket);assert.equal((await proof()).attendanceVerified,false);
- f.sqlite.prepare('UPDATE registrations SET checked_in_at=NULL,claimed_at=? WHERE id=?').run(1,ticket);
- const qr=await proof();assert.equal(qr.claimMethod,'static-qr');assert.equal(qr.attendanceVerified,false);assert.equal(qr.role,'Attendee');
+ for(const wallet of [f.admin,f.organizer,f.outsider]) {
+  const cookie=await f.login(wallet),me=await(await f.request('/auth/me',undefined,cookie)).json();assert.equal(me.admin,wallet===f.admin);
+  assert.equal((await f.request('/admin/events/1',{action:'verify'},cookie)).status,wallet===f.admin?200:403);
+ }
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM admin_audit').get().n,1);
+});
+test('SIWE verifies the requested wallet, consumes challenges once, and requires a wallet',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());assert.equal((await f.request('/auth/challenge',{})).status,400);
+ const challenge=await(await f.request('/auth/challenge',{wallet:f.participant.address})).json();assert.match(challenge.message,/Chain ID: 11155111/);
+ assert.equal((await f.request('/auth/verify',{id:challenge.id,signature:await f.outsider.signMessage(challenge.message)})).status,401);
+ const input={id:challenge.id,signature:await f.participant.signMessage(challenge.message)};
+ assert.equal((await f.request('/auth/verify',input)).status,200);assert.equal((await f.request('/auth/verify',input)).status,401);
+});
+test('reject immediately unlists and blocks claims, queues and confirms on-chain pause, and audits reason',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin);
+ assert.equal((await f.request('/admin/events/1',{action:'reject',reason:'Misleading listing'},admin)).status,202);
+ assert.deepEqual(await(await f.request('/events')).json(),[]);
+ const row=f.sqlite.prepare('SELECT * FROM events').get();assert.equal(row.paused,1);assert.equal(row.rejection_reason,'Misleading listing');
+ let paused=false;f.chain.signAction=async action=>{assert.deepEqual(JSON.parse(action.payload),{ids:[1],paused:true});paused=true;return {raw:'pause',hash:'0xpause'};};f.chain.receipt=async()=>({status:1});
+ await actionNext(f.DB,f.chain);assert(paused);assert.equal(f.sqlite.prepare('SELECT status FROM chain_actions').get().status,'live');
+ assert.equal((await f.request('/admin/events/1',{action:'resume'},admin)).status,409);
+ assert.match(f.sqlite.prepare('SELECT details FROM admin_audit').get().details,/Misleading listing/);
+});
+test('admin can edit only off-chain text; badge and mint fields are rejected',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.admin),input={action:'edit',title:'New title',description:'New description',venue:'Online',category:'Workshop'};
+ for(const frozen of [{uri:'changed'},{image:'changed'},{mintStartsAt:1},{mintEndsAt:2},{cap:100}])assert.equal((await f.request('/admin/events/1',{...input,...frozen},cookie)).status,400);
+ assert.equal((await f.request('/admin/events/1',input,cookie)).status,200);assert.equal(f.sqlite.prepare('SELECT uri FROM events').get().uri,'ipfs://old');
+});
+test('direct publish freezes per-role metadata and creates a live event without review, resumes idempotently',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.organizer),id=crypto.randomUUID();
+ const media=await(await f.request('/artwork',{name:'Build together',description:'A day of community',role:'Attendee'},cookie)).json();
+ const input={id,title:'Build together',description:'A day of community',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:50,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:50,...media}]};
+ assert.equal((await f.request('/organizer/events',input,cookie)).status,202);
+ assert.equal((await f.request('/organizer/events',input,cookie)).status,202);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM chain_actions').get().n,1);
+ await actionNext(f.DB,f.chain);const signed=f.sqlite.prepare('SELECT raw_tx FROM chain_actions').get().raw_tx;assert.equal(signed,'publish');
+ f.chain.signAction=async()=>{throw Error('Must not sign twice');};f.chain.receipt=async()=>({status:1});await actionNext(f.DB,f.chain);
+ const progress=await(await f.request(`/publications/${id}`,undefined,cookie)).json();assert.equal(progress.status,'live');assert.equal(progress.events[0].id,2);
+ const event=(await(await f.request('/events')).json()).find(e=>e.id===2);assert.equal(event.title,input.title);assert.equal(event.organizer,f.organizer.address);
+ assert.equal(f.sqlite.prepare("SELECT name FROM sqlite_master WHERE name='organizer_drafts'").get(),undefined);
+});
+test('RSVP, check-in, draft review, registration, and old ticket endpoints do not exist',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.admin);
+ for(const path of ['/events/1/rsvp','/organizer/review','/tickets/'+crypto.randomUUID(),'/registrations','/tickets/'+crypto.randomUUID()+'/check-in'])assert.equal((await f.request(path,{},cookie)).status,404,path);
+ assert.equal(f.sqlite.prepare("SELECT name FROM sqlite_master WHERE name='registrations'").get(),undefined);
+});
+test('rotating QR accepts current and previous slot, rejects older, future, forged and another event',async()=>{
+ const secret='s'.repeat(32),seconds=3000;
+ for(const delta of [0,-30])assert(await validQR(secret,1,await qrToken(secret,1,seconds+delta),seconds));
+ for(const delta of [-60,30])assert.equal(await validQR(secret,1,await qrToken(secret,1,seconds+delta),seconds),false);
+ assert.equal(await validQR(secret,2,await qrToken(secret,1,seconds),seconds),false);
+ assert.equal(await validQR(secret,1,await qrToken('x'.repeat(32),1,seconds),seconds),false);
+});
+test('QR mint is bound to the SIWE wallet and one per event role wallet',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.participant),qr=await qrToken(f.env.QR_HMAC_SECRET,1),input={permanentConsent:true,qr};
+ assert.equal((await f.request('/events/1/claim',input)).status,401);
+ assert.equal((await f.request('/events/1/claim',{...input,wallet:f.outsider.address},cookie)).status,400);
+ assert.equal((await f.request('/events/1/claim',input,cookie)).status,202);
+ assert.equal((await f.request('/events/1/claim',input,cookie)).status,409);
+ assert.equal(f.sqlite.prepare('SELECT wallet,method FROM claims').get().wallet,f.participant.address);assert.equal(f.sqlite.prepare('SELECT method FROM claims').get().method,'QR');
+});
+test('concurrent single-use link claims have exactly one winner, tokens only stored as hashes',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer),link=await issue(f,owner),token=tokenOf(link),a=await f.login(f.participant),b=await f.login(f.outsider);
+ assert(!JSON.stringify(f.sqlite.prepare('SELECT * FROM links').all()).includes(token));
+ const responses=await Promise.all([f.request('/redeem/claim',{token,permanentConsent:true},a),f.request('/redeem/claim',{token,permanentConsent:true},b)]);
+ assert.deepEqual(responses.map(r=>r.status).sort(),[202,409]);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM claims').get().n,1);assert.equal(f.sqlite.prepare('SELECT state FROM links').get().state,'claiming');
+});
+test('expired windows, revoked links, paused events, and exhausted caps reject claims',async t=>{
+ for(const scenario of ['expired','revoked','paused','cap']) {
+  const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer),link=await issue(f,owner),cookie=await f.login(f.participant);
+  if(scenario==='expired')f.chain.event=async()=>({cap:2n,minted:0n,startsAt:1n,endsAt:2n});
+  if(scenario==='revoked')await f.request(`/links/${link.id}/revoke`,{},owner);
+  if(scenario==='paused')f.sqlite.exec('UPDATE events SET paused=1');
+  if(scenario==='cap')f.chain.event=async()=>({cap:2n,minted:2n,startsAt:BigInt(f.seconds-1),endsAt:BigInt(f.seconds+100)});
+  assert.equal((await f.request('/redeem/claim',{token:tokenOf(link),permanentConsent:true},cookie)).status,409,scenario);
+ }
+});
+test('duplicate normalized emails merge per role; recipients and hashes never leak publicly',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer),response=await f.request('/events/1/links',{csv:'email,role\nPerson@Example.org,Attendee\nperson@example.org,Attendee'},owner),data=await response.json();
+ assert.equal(data.links.length,1);assert.equal(data.merged,1);assert.equal(data.links[0].email,'person@example.org');
+ const outsider=await f.login(f.outsider);assert.equal((await f.request('/events/1/links',undefined,outsider)).status,403);
+ for(const response of [await f.request('/events'),await f.request('/redeem',{token:tokenOf(data.links[0])})])assert(!(await response.text()).includes('person@example.org'));
+ const list=await(await f.request('/events/1/links',undefined,owner)).text();assert(!list.includes('token_hash'));
+ await f.request('/events/1/delete-emails',{},owner);assert.equal(f.sqlite.prepare('SELECT email FROM links').get().email,null);
+ assert.deepEqual(parseRecipients('"email","role"\r\n"a@example.org","Judge"'),[{email:'a@example.org',role:'Judge'}]);
+ assert.match(csv([['=formula','"quoted"']]),/^"'=formula","""quoted"""$/);
+});
+test('permanent failure releases link; a later claim can retry and settle to minted',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer),link=await issue(f,owner),cookie=await f.login(f.participant),path='/redeem/claim';
+ const result=await(await f.request(path,{token:tokenOf(link),permanentConsent:true},cookie)).json();
+ f.sqlite.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(result.ticket);await settleLinks(f.DB);
+ assert.equal(f.sqlite.prepare('SELECT state FROM links').get().state,'issued');
+ assert.equal((await f.request(path,{token:tokenOf(link),permanentConsent:true},cookie)).status,202);
+ f.chain.receipt=async()=>({status:1});f.chain.token=async()=> '12';await mintNext(f.DB,f.chain);
+ assert.equal(f.sqlite.prepare('SELECT state FROM links').get().state,'minted');assert.equal(f.sqlite.prepare('SELECT token_id FROM jobs').get().token_id,'12');
+});
+test('email retention cleanup deletes addresses but preserves mint history',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer);await issue(f,owner);
+ f.sqlite.prepare('UPDATE links SET created_at=?').run(f.seconds-31*86400);await worker.scheduled({},f.env);
+ assert.equal(f.sqlite.prepare('SELECT email FROM links').get().email,null);
 });
 
-test('health probes every dependency without waking the mint queue',async t=>{
- const f=fixture();t.after(()=>f.sqlite.close());
- f.env.MINT.get=()=>({fetch:async request=>{assert.equal(new URL(request.url).pathname,'/health');return Response.json({ok:true});}});
- f.chain.provider={getCode:async()=> '0x1234'};f.chain.contract={nextEventId:async()=>1n};
- const response=await f.request('/health');assert.equal(response.status,200);const data=await response.json();assert.equal(data.status,'ok');assert.equal(Object.keys(data.dependencies).length,5);
- const logs=t.mock.method(console,'error',()=>{});
- f.env.DB.prepare=()=>{throw Error('D1_ERROR: no such table: events');};
- const failed=await f.request('/health');assert.equal(failed.status,503);assert.equal((await failed.json()).dependencies.d1.code,'DATABASE_ERROR');assert(logs.mock.calls.length);
+test('500-recipient imports stay under D1 query and parameter limits',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.organizer),prepare=f.DB.prepare;let statements=0;
+ f.DB.prepare=sql=>{statements++;const query=prepare(sql),bind=query.bind;query.bind=(...values)=>{assert(values.length<=100,'D1 bound parameter limit');return bind(...values);};return query;};
+ const recipients=Array.from({length:500},(_,i)=>({email:`person${i}@example.org`,role:'Attendee'}));
+ const response=await f.request('/events/1/links',{recipients},cookie);assert.equal(response.status,201,await response.clone().text());assert.equal((await response.json()).links.length,500);assert(statements<50,'Free-tier per-request query limit');
 });
-test('unexpected handler errors are JSON, log safe details, and preserve shipped collection endpoints',async t=>{
- const f=fixture();t.after(()=>f.sqlite.close());const logs=t.mock.method(console,'error',()=>{});
- f.env.ASSETS.fetch=async()=>{throw Error('Unexpected asset failure');};
- const response=await createHandler()(new Request('https://kairo.test/'),f.env);assert.equal(response.status,503);assert.equal((await response.json()).code,'INTERNAL_ERROR');assert(logs.mock.calls.length);
- const old=await f.request('/collection?wallet='+f.outsider.address);assert.equal(old.status,200);assert.deepEqual(await old.json(),[]);
+test('the same email can get distinct roles, but a wallet cannot consume two links for one role',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const original=f.sqlite.prepare('SELECT * FROM events WHERE id=1').get(),second={...original,id:2,roles:'["Judge"]',group_id:'shared'};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));f.sqlite.exec("UPDATE events SET group_id='shared' WHERE id=1");
+ const cookie=await f.login(f.organizer),participant=await f.login(f.participant);
+ const issued=await(await f.request('/events/1/links',{recipients:[{email:' person@example.org ',role:'Attendee'},{email:'person@example.org',role:'Judge'},{email:'second@example.org',role:'Attendee'}]},cookie)).json();assert.equal(issued.links.length,3);
+ for(const role of ['Attendee','Judge']){const link=issued.links.find(link=>link.role===role);assert.equal((await f.request('/redeem/claim',{token:tokenOf(link),permanentConsent:true},participant)).status,202);}
+ const duplicate=issued.links.find(link=>link.email==='second@example.org');assert.equal((await f.request('/redeem/claim',{token:tokenOf(duplicate),permanentConsent:true},participant)).status,409);
+});
+test('organizer retries a failed recipient mint atomically; revoked links cannot retry',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const owner=await f.login(f.organizer),link=await issue(f,owner),participant=await f.login(f.participant);
+ const claim=await(await f.request('/redeem/claim',{token:tokenOf(link),permanentConsent:true},participant)).json();f.sqlite.exec("UPDATE jobs SET status='failed'");await settleLinks(f.DB);
+ assert.equal((await f.request(`/claims/${claim.ticket}/retry`,{},owner)).status,202);assert.equal(f.sqlite.prepare('SELECT state FROM links').get().state,'claiming');
+ f.sqlite.exec("UPDATE jobs SET status='failed'");await settleLinks(f.DB);await f.request(`/links/${link.id}/revoke`,{},owner);
+ assert.equal((await f.request(`/claims/${claim.ticket}/retry`,{},owner)).status,409);
+});
+test('batch mints persist all members and recover the same signed nonce after a broadcast outage',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const qr=await qrToken(f.env.QR_HMAC_SECRET,1);
+ for(const wallet of [f.participant,f.outsider])await f.request('/events/1/claim',{qr,permanentConsent:true},await f.login(wallet));
+ let signs=0;f.chain.signMintBatch=async jobs=>{signs++;assert.equal(jobs.length,2);return {raw:'batch',hash:'0xbatch'};};f.chain.broadcast=async()=>{throw Error('Temporary RPC outage');};
+ await mintNext(f.DB,f.chain);assert.equal(signs,1);assert(f.sqlite.prepare('SELECT * FROM jobs').all().every(job=>job.raw_tx==='batch'&&job.status==='submitted'));
+ f.chain.receipt=async()=>({status:1});f.chain.token=async(id,wallet)=>wallet===f.participant.address?'11':'12';await mintNext(f.DB,f.chain);
+ assert.equal(signs,1);assert(f.sqlite.prepare('SELECT * FROM jobs').all().every(job=>job.status==='confirmed'));
+});
+test('an acknowledged-late D1 commit cannot reset a persisted signed nonce to pending',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const qr=await qrToken(f.env.QR_HMAC_SECRET,1);await f.request('/events/1/claim',{qr,permanentConsent:true},await f.login(f.participant));
+ const batch=f.DB.batch;let interrupted=false;
+ f.DB.batch=async queries=>{const result=await batch(queries);if(!interrupted&&f.sqlite.prepare("SELECT id FROM jobs WHERE raw_tx IS NOT NULL").get()){interrupted=true;throw Error('Response lost after commit');}return result;};
+ await mintNext(f.DB,f.chain);const job=f.sqlite.prepare('SELECT * FROM jobs').get();assert.equal(job.status,'submitted');assert.equal(job.raw_tx,'signed');
+});
+test('migration preserves existing issued jobs and transaction history while dropping registration data',()=>{
+ const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');
+ try {
+  const files=readdirSync('serverless/migrations').sort();for(const file of files.filter(file=>file<'0009'))db.exec(readFileSync(`serverless/migrations/${file}`,'utf8'));
+  db.exec("INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at) VALUES(1,'title','description','club','Technology','venue','image','uri',1,2,1,10,'wallet',1)");
+  db.exec("INSERT INTO registrations(id,event_id,student_hash,wallet,consent_at,claimed_at) VALUES('claim',1,'private-id-hash','wallet',1,1)");
+  db.exec("INSERT INTO jobs(id,status,raw_tx,tx_hash,token_id,created_at) VALUES('claim','confirmed','raw','hash','7',1)");db.exec("INSERT INTO mint_transactions VALUES('hash','claim','raw',1)");
+  for(const file of files.filter(file=>file>='0009'))db.exec('BEGIN;'+readFileSync(`serverless/migrations/${file}`,'utf8')+'COMMIT;');
+  assert.equal(db.prepare('SELECT token_id FROM jobs').get().token_id,'7');assert.equal(db.prepare('SELECT method FROM claims').get().method,'QR');assert.equal(db.prepare('SELECT hash FROM mint_transactions').get().hash,'hash');assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='registrations'").get(),undefined);
+ }finally{db.close();}
 });
 
-test('role designs stay frozen, publish as linked drops and resume without completing the draft early', async t => {
-  const f=fixture();t.after(()=>f.sqlite.close());const objects=new Map();
-  f.env.MEDIA={async put(key,value,options){objects.set(key,{value,...options});},async get(key){const object=objects.get(key);return object&&{body:object.value,httpMetadata:object.httpMetadata,async json(){return JSON.parse(object.value);}};}};
-  const owner=await f.login(f.staff),admin=await f.login(f.admin);
-  const title='Campus makers',description='A day of coding and building together',roles=['Attendee','Volunteer'];
-  const roleArtwork=[];
-  for(const role of roles) {
-    const response=await f.request('/artwork',{name:title,description,role},owner);assert.equal(response.status,200);
-    const art=await response.json();roleArtwork.push({role,...art,cap:role==='Attendee'?40:12});
-    const metadata=JSON.parse(objects.get(art.uri.split('/media/')[1]).value);assert.deepEqual(metadata.attributes,[{trait_type:'Role',value:role}]);
-  }
-  assert.notEqual(roleArtwork[0].image,roleArtwork[1].image);assert.notEqual(roleArtwork[0].uri,roleArtwork[1].uri);
-  const start=Math.floor(Date.now()/1000)+7200;
-  const details={title,description,organizer:f.staff.address,club:'Campus',category:'Workshop',campus:'Main',eligibility:'Students',claimMode:'attendance',roles,venue:'Hall A',cap:50,eventStartsAt:start,eventEndsAt:start+3600,mintStartsAt:start,mintEndsAt:start+7200,rsvpDeadline:start-60,...roleArtwork[0],roleArtwork,submit:true};
-  assert.equal((await f.request('/organizer/events',{...details,roleArtwork:[roleArtwork[0],roleArtwork[0]]},owner)).status,400);
-  assert.equal((await f.request('/organizer/events',{...details,roleArtwork:[roleArtwork[0],{...roleArtwork[0],role:'Volunteer'}]},owner)).status,409);
-  assert.equal((await f.request('/organizer/events',{...details,roleArtwork:[roleArtwork[0],{...roleArtwork[1],cap:1.5}]},owner)).status,400);
-  assert.equal((await f.request('/organizer/events',{...details,roleArtwork:[roleArtwork[0],{...roleArtwork[1],cap:10001}]},owner)).status,400);
-  const result=await f.request('/organizer/events',details,owner);assert.equal(result.status,201);const draft=await result.json();
-  f.chain.contract={async eventAdmin(){return f.staff.address;}};
-  for(let index=0;index<roleArtwork.length;index++) {
-    const art=roleArtwork[index];f.chain.event=async()=>({uri:art.uri,cap:BigInt(art.cap),startsAt:BigInt(start),endsAt:BigInt(start+7200)});
-    const drop={...details,...art,id:index+2,draftId:draft.id,roles:[art.role]};
-    const bad=await f.request('/events',{...drop,title:'Changed title'},admin);assert.equal(bad.status,409);
-    const correctEvent=f.chain.event;f.chain.event=async()=>({...await correctEvent(),cap:99n});
-    assert.equal((await f.request('/events',drop,admin)).status,409);f.chain.event=correctEvent;
-    const response=await f.request('/events',drop,admin);assert.equal(response.status,201,await response.text());
-    assert.equal((await f.request('/events',drop,admin)).status,200);
-    const row=f.sqlite.prepare('SELECT * FROM organizer_drafts WHERE id=?').get(draft.id);assert.equal(row.status,index===0?'submitted':'published');
-    const saved=await (await f.request('/organizer/events',undefined,owner)).json();assert.deepEqual(saved[0].publishedRoles,roles.slice(0,index+1));
-    assert.equal((await f.request('/organizer/events',{...details,id:draft.id},owner)).status,409);
-  }
-  const published=await (await f.request('/events')).json();const linked=published.filter(event=>event.groupId===draft.id);assert.equal(linked.length,2);assert.deepEqual(linked.map(event=>event.cap).sort((a,b)=>a-b),[12,40]);
-  assert.deepEqual(linked.map(event=>event.uri).sort(),roleArtwork.map(art=>art.uri).sort());
-  const rsvp=await f.request('/events/3/rsvp',{studentId:'VOL-001',permanentConsent:true},await f.login(f.outsider));assert.equal(rsvp.status,201);
-  const {ticket}=await rsvp.json();assert.equal(f.sqlite.prepare('SELECT participation_role FROM registrations WHERE id=?').get(ticket).participation_role,'Volunteer');
+test('rejecting an event moderates all its role drops in one on-chain action',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const original=f.sqlite.prepare('SELECT * FROM events WHERE id=1').get(),second={...original,id:2,roles:'["Judge"]',group_id:'shared'};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));f.sqlite.exec("UPDATE events SET group_id='shared' WHERE id=1");
+ const response=await f.request('/admin/events/1',{action:'reject',reason:'Rejected event'},await f.login(f.admin));assert.equal(response.status,202);
+ assert(f.sqlite.prepare('SELECT * FROM events').all().every(event=>event.listed===0&&event.paused===1));
+ const payload=JSON.parse(f.sqlite.prepare('SELECT payload FROM chain_actions').get().payload);assert.deepEqual(payload.ids,[1,2]);assert.equal(payload.paused,true);
+});
+test('the daily publish limit has one winner under concurrent publication requests',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());f.env.EVENTS_PER_WALLET_PER_DAY='1';const cookie=await f.login(f.organizer);
+ const media=await(await f.request('/artwork',{name:'Community event',description:'A day of community',role:'Attendee'},cookie)).json();
+ const input={title:'Community event',description:'A day of community',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:20,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:20,...media}]};
+ const responses=await Promise.all([f.request('/organizer/events',{...input,id:crypto.randomUUID()},cookie),f.request('/organizer/events',{...input,id:crypto.randomUUID()},cookie)]);assert.deepEqual(responses.map(response=>response.status).sort(),[202,429]);
+});
+
+test('a lost completion acknowledgment cannot reopen a confirmed mint or duplicate a live publication',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.organizer);
+ const media=await(await f.request('/artwork',{name:'Community event',description:'A day of community',role:'Attendee'},cookie)).json();
+ const input={id:crypto.randomUUID(),title:'Community event',description:'A day of community',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:20,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:20,...media}]};
+ await f.request('/organizer/events',input,cookie);f.chain.receipt=async()=>({status:1});
+ const batch=f.DB.batch;let lost=false;
+ f.DB.batch=async queries=>{const result=await batch(queries);if(!lost&&f.sqlite.prepare("SELECT id FROM chain_actions WHERE status='live'").get()){lost=true;throw Error('Completion acknowledgment lost');}return result;};
+ await actionNext(f.DB,f.chain);assert.equal(f.sqlite.prepare('SELECT status FROM chain_actions').get().status,'live');assert.equal(await actionNext(f.DB,f.chain),false);
+ const qr=await qrToken(f.env.QR_HMAC_SECRET,1);await f.request('/events/1/claim',{qr,permanentConsent:true},await f.login(f.participant));
+ let lostMint=false;
+ f.DB.batch=async queries=>{const result=await batch(queries);if(!lostMint&&f.sqlite.prepare("SELECT id FROM jobs WHERE status='confirmed'").get()){lostMint=true;throw Error('Completion acknowledgment lost');}return result;};
+ let signed=false;f.chain.token=async()=>signed?'17':'0';f.chain.signMint=async()=>{signed=true;return {raw:'signed',hash:'0xmint'};};
+ await mintNext(f.DB,f.chain);assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status,'confirmed');assert.equal(await mintNext(f.DB,f.chain),false);
+});
+
+test('local publishing uses real public storage URLs and validates their metadata before queueing',async t=>{
+ const f=fixture('http://localhost:8787');t.after(()=>f.sqlite.close());f.env.MEDIA_BASE_URL='https://art.r2.dev/';const cookie=await f.login(f.organizer);
+ const media=await(await f.request('/artwork',{name:'Community event',description:'A day of community',role:'Attendee'},cookie)).json();
+ assert(media.uri.startsWith('https://art.r2.dev/metadata/'));assert(media.image.startsWith('https://art.r2.dev/art/'));
+ t.mock.method(globalThis,'fetch',async uri=>Response.json(JSON.parse(f.objects.get(new URL(uri).pathname.slice(1)))));
+ const input={id:crypto.randomUUID(),title:'Community event',description:'A day of community',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:20,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:20,...media}]};
+ const response=await f.request('/organizer/events',input,cookie);assert.equal(response.status,202,await response.clone().text());
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM chain_actions').get().n,1);
+});
+
+test('recipient and activity pagination do not advertise an empty next page',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const organizer=await f.login(f.organizer),admin=await f.login(f.admin);
+ const insert=f.sqlite.prepare('INSERT INTO links(id,event_id,email,token_hash,created_at) VALUES(?,1,?,?,?)');
+ for(let i=0;i<100;i++)insert.run(crypto.randomUUID(),`person${i}@example.org`,String(i).padStart(64,'0'),f.seconds);
+ let page=await(await f.request('/events/1/links',undefined,organizer)).json();assert.equal(page.rows.length,100);assert.equal(page.hasMore,false);
+ insert.run(crypto.randomUUID(),'last@example.org','f'.repeat(64),f.seconds);page=await(await f.request('/events/1/links',undefined,organizer)).json();assert.equal(page.hasMore,true);
+ const last=await(await f.request('/events/1/links?page=1',undefined,organizer)).json();assert.equal(last.rows.length,1);assert.equal(last.hasMore,false);
+ for(let i=0;i<50;i++)f.sqlite.prepare('INSERT INTO admin_audit VALUES(?,?,1,?,?,?)').run(crypto.randomUUID(),f.admin.address,'verify','{}',f.seconds);
+ const audit=await(await f.request('/admin/audit',undefined,admin)).json();assert.equal(audit.rows.length,50);assert.equal(audit.hasMore,false);
+});
+
+test('all-event admin listing is protected while organizer lists remain wallet-scoped',async()=>{
+ const f=fixture();
+ assert.equal((await f.request('/admin/events',undefined,await f.login(f.organizer))).status,403);
+ assert.equal((await f.request('/admin/events')).status,401);
+ const own=await (await f.request('/organizer/events',undefined,await f.login(f.admin))).json();assert.equal(own.events.length,0);
+ const all=await (await f.request('/admin/events',undefined,await f.login(f.admin))).json();assert.equal(all.events.length,1);
+});
+
+test('QR and link claims reserve only remaining on-chain supply when historical mints are not indexed',async t=>{
+ for(const method of ['QR','LINK']) {
+  const f=fixture();t.after(()=>f.sqlite.close());
+  const original=f.chain.event;f.chain.event=async()=>({...await original(),minted:1n});
+  const owner=await f.login(f.organizer),a=await f.login(f.participant),b=await f.login(f.outsider);
+  const saved=new Map();
+  const claim=async(cookie,email)=>method==='QR'?f.request('/events/1/claim',{qr:await qrToken(f.env.QR_HMAC_SECRET,1),permanentConsent:true},cookie):f.request('/redeem/claim',{token:saved.get(email)||await (async()=>{const token=tokenOf(await issue(f,owner,email));saved.set(email,token);return token;})(),permanentConsent:true},cookie);
+  assert.equal((await claim(a,'first@example.org')).status,202);
+  assert.equal((await claim(b,'second@example.org')).status,409);
+  const stats=await(await f.request('/events/1/dashboard',undefined,owner)).json();
+  assert.equal(stats.minted,1);assert.equal(stats.pending,1);assert.equal(stats.capRemaining,0);
+  const first=f.sqlite.prepare('SELECT id FROM jobs').get().id;f.sqlite.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(first);await settleLinks(f.DB);
+  assert.equal((await claim(b,'second@example.org')).status,202);
+  assert.equal((await f.request(`/claims/${first}/retry`,{},owner)).status,409);
+ }
+});
+
+test('direct mint is superadmin-only, validates recipients and queues the supplied address exactly once',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),input={wallet:f.participant.address};
+ assert.equal((await f.request('/admin/events/1/mint',input)).status,401);
+ for(const wallet of [f.organizer,f.participant])assert.equal((await f.request('/admin/events/1/mint',input,await f.login(wallet))).status,403);
+ for(const wallet of ['bad','0x0000000000000000000000000000000000000000'])assert.equal((await f.request('/admin/events/1/mint',{wallet},admin)).status,400);
+ const responses=await Promise.all([f.request('/admin/events/1/mint',input,admin),f.request('/admin/events/1/mint',{wallet:input.wallet.toLowerCase()},admin)]);
+ assert.deepEqual(responses.map(r=>r.status).sort(),[202,409]);
+ const claim=f.sqlite.prepare('SELECT * FROM claims').get();assert.equal(claim.wallet,input.wallet);assert.equal(claim.method,'ADMIN');assert.notEqual(claim.wallet,f.admin.address);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM admin_audit').get().n,1);
+ f.chain.signMint=async(id,wallet)=>{assert.equal(id,1);assert.equal(wallet,input.wallet);return {raw:'signed',hash:'0xmint'};};
+ await mintNext(f.DB,f.chain);assert.equal(f.sqlite.prepare('SELECT status FROM jobs').get().status,'submitted');
+});
+
+test('POAP requests bind to the signed wallet, stay private and do not mint before admin acceptance',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const participant=await f.login(f.participant),admin=await f.login(f.admin),path='/events/1/requests';
+ assert.equal((await f.request(path,{permanentConsent:true})).status,401);
+ assert.equal((await f.request(path,{permanentConsent:false},participant)).status,400);
+ assert.equal((await f.request(path,{permanentConsent:true,wallet:f.outsider.address},participant)).status,400);
+ const row=await(await f.request(path,{permanentConsent:true},participant)).json();assert.equal(row.wallet,f.participant.address);assert.equal(row.status,'pending');
+ assert.equal((await(await f.request(path,{permanentConsent:true},participant)).json()).id,row.id);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,0);
+ for(const wallet of [f.organizer,f.outsider])assert.equal((await(await f.request(path,undefined,await f.login(wallet))).json()).rows.length,0);
+ assert.equal((await(await f.request(path,undefined,admin)).json()).rows.length,1);
+ const decision=`/admin/events/1/requests/${row.id}/accept`;
+ assert.equal((await f.request(decision,{},participant)).status,403);
+ assert.equal((await f.request(`/admin/events/2/requests/${row.id}/accept`,{},admin)).status,404);
+ assert.equal((await f.request(decision,{},admin)).status,202);
+ assert.equal((await f.request(decision,{},admin)).status,409);
+ const saved=f.sqlite.prepare('SELECT * FROM poap_requests').get();assert.equal(saved.status,'accepted');
+ assert.equal(saved.claim_id,f.sqlite.prepare('SELECT id FROM claims').get().id);
+ assert.equal((await(await f.request(path,undefined,participant)).json()).rows[0].mint_status,'pending');
+ f.sqlite.exec("UPDATE jobs SET status='failed'");
+ assert.equal((await f.request(`/claims/${saved.claim_id}/retry`,{},await f.login(f.organizer))).status,403);
+ assert.equal((await f.request(`/claims/${saved.claim_id}/retry`,{},admin)).status,202);
+});
+
+test('concurrent accept/reject decisions have one winner and rejected requests never create jobs',async t=>{
+ for(const decisions of [['reject','reject'],['accept','reject']]) {
+  const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin);
+  const row=await(await f.request('/events/1/requests',{permanentConsent:true},await f.login(f.participant))).json();
+  const responses=await Promise.all(decisions.map(action=>f.request(`/admin/events/1/requests/${row.id}/${action}`,{},admin)));
+  assert.equal(responses.filter(r=>r.status===409).length,1);
+  const saved=f.sqlite.prepare('SELECT * FROM poap_requests').get(),jobs=f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n;
+  assert.equal(jobs,saved.status==='accepted'?1:0);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM admin_audit').get().n,1);
+  if(saved.status==='rejected')assert.equal((await f.request(`/admin/events/1/requests/${row.id}/accept`,{},admin)).status,409);
+ }
+});
+
+test('admin mint and request acceptance enforce windows, pauses, existing tokens and remaining supply',async t=>{
+ for(const scenario of ['future','expired','paused','unlisted','cap','existing']) {
+  const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin);
+  const row=await(await f.request('/events/1/requests',{permanentConsent:true},await f.login(f.participant))).json();
+  const original=f.chain.event;
+  if(scenario==='future')f.chain.event=async()=>({...await original(),startsAt:BigInt(f.seconds+100)});
+  if(scenario==='expired')f.chain.event=async()=>({...await original(),endsAt:BigInt(f.seconds-1)});
+  if(scenario==='cap')f.chain.event=async()=>({...await original(),minted:2n});
+  if(scenario==='paused')f.sqlite.exec('UPDATE events SET paused=1');
+  if(scenario==='unlisted')f.sqlite.exec('UPDATE events SET listed=0');
+  if(scenario==='existing')f.chain.token=async()=> '17';
+  for(const [path,input] of [[`/admin/events/1/requests/${row.id}/accept`,{}],['/admin/events/1/mint',{wallet:f.participant.address}]])assert.equal((await f.request(path,input,admin)).status,409,scenario);
+  assert.equal(f.sqlite.prepare('SELECT status FROM poap_requests').get().status,'pending');assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,0);
+ }
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),original=f.chain.event;f.chain.event=async()=>({...await original(),minted:1n});
+ const row=await(await f.request('/events/1/requests',{permanentConsent:true},await f.login(f.participant))).json();
+ const responses=await Promise.all([f.request(`/admin/events/1/requests/${row.id}/accept`,{},admin),f.request('/admin/events/1/mint',{wallet:f.outsider.address},admin)]);
+ assert.deepEqual(responses.map(r=>r.status).sort(),[202,409]);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,1);
+});
+
+test('POAP migration preserves linked claims, signed jobs and transaction history with valid foreign keys',()=>{
+ const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');
+ try {
+  for(const file of readdirSync('serverless/migrations').sort().filter(file=>file<'0011'))db.exec(readFileSync(`serverless/migrations/${file}`,'utf8'));
+  db.exec("INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,cap,organizer,created_at) VALUES(1,'title','description','club','Technology','venue','image','uri',1,2,10,'wallet',1)");
+  db.exec("INSERT INTO claims VALUES('claim',1,'wallet','LINK',1,'attempt'); INSERT INTO jobs(id,status,raw_tx,tx_hash,created_at) VALUES('claim','submitted','signed','hash',1)");
+  db.exec("INSERT INTO links(id,event_id,token_hash,state,claim_id,created_at) VALUES('link',1,'secret-hash','claiming','claim',1); INSERT INTO mint_transactions VALUES('hash','claim','signed',1)");
+  db.exec('BEGIN;'+readFileSync('serverless/migrations/0011_poap_requests.sql','utf8')+'COMMIT;');
+  assert.equal(db.prepare('SELECT claim_id FROM links').get().claim_id,'claim');assert.equal(db.prepare('SELECT raw_tx FROM jobs').get().raw_tx,'signed');assert.equal(db.prepare('SELECT hash FROM mint_transactions').get().hash,'hash');assert.equal(db.prepare('SELECT attempt_id FROM claims').get().attempt_id,'attempt');assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+ }finally{db.close();}
+});
+
+test('request status is wallet-private across events and admin can filter to their own request',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),participant=await f.login(f.participant);
+ await f.request('/events/1/requests',{permanentConsent:true},participant);
+ assert.equal((await f.request('/my/requests')).status,401);
+ assert.equal((await(await f.request('/my/requests',undefined,participant)).json()).rows[0].role,'Attendee');
+ assert.equal((await(await f.request('/my/requests',undefined,admin)).json()).rows.length,0);
+ assert.equal((await(await f.request('/events/1/requests?mine=1',undefined,admin)).json()).rows.length,0);
+ assert.equal((await(await f.request('/events/1/requests',undefined,admin)).json()).rows.length,1);
+});
+
+test('admin edits refresh dashboard listing for every role without changing frozen mint data',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const original=f.sqlite.prepare('SELECT * FROM events').get();
+ const second={...original,id:2,roles:'["Speaker"]',group_id:'shared'};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));f.sqlite.exec("UPDATE events SET group_id='shared' WHERE id=1");
+ const admin=await f.login(f.admin),input={action:'edit',title:'Updated title',description:'Updated description',venue:'Hall B',category:'Workshop',club:'New club',campus:'North',eventStartsAt:f.seconds-100,eventEndsAt:f.seconds+100,approximateAttendees:30};
+ assert.equal((await f.request('/admin/events/1',{...input,eventEndsAt:input.eventStartsAt},admin)).status,400);
+ assert.equal((await f.request('/admin/events/1',input,admin)).status,200);
+ for(const row of f.sqlite.prepare('SELECT * FROM events').all()){assert.equal(row.campus,'North');assert.equal(row.event_starts_at,input.eventStartsAt);assert.equal(row.starts_at,original.starts_at);assert.equal(row.uri,original.uri);assert.equal(row.cap,original.cap);}
+ const dashboard=await(await f.request('/events/1/dashboard',undefined,admin)).json();assert.equal(dashboard.event.title,input.title);assert.equal(dashboard.event.approximateAttendees,30);assert.equal(dashboard.mintStartsAt,f.seconds-10);
+});
+
+test('all mint routes fail before queueing when the event issuer is not ready',async t=>{
+ t.mock.method(console,'error',()=>{});
+ const {ServiceError}=await import('./errors.js');const f=fixture();t.after(()=>f.sqlite.close());
+ const admin=await f.login(f.admin),participant=await f.login(f.participant);
+ const row=await(await f.request('/events/1/requests',{permanentConsent:true},participant)).json();
+ f.chain.assertMintReady=async()=>{throw new ServiceError('ISSUER_NOT_AUTHORIZED','Issuer permission is missing.','contract',409);};
+ for(const [path,data,cookie] of [['/admin/events/1/mint',{wallet:f.participant.address},admin],[`/admin/events/1/requests/${row.id}/accept`,{},admin],['/events/1/claim',{qr:await qrToken(f.env.QR_HMAC_SECRET,1),permanentConsent:true},participant]]) {
+  const response=await f.request(path,data,cookie);assert.equal(response.status,409);assert.equal((await response.json()).code,'ISSUER_NOT_AUTHORIZED');
+ }
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,0);assert.equal(f.sqlite.prepare('SELECT status FROM poap_requests').get().status,'pending');
+});
+
+test('batch simulation failure falls back to one mint instead of failing all recipients',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin);
+ for(const wallet of [f.participant,f.outsider])assert.equal((await f.request('/admin/events/1/mint',{wallet:wallet.address},admin)).status,202);
+ f.chain.signMintBatch=async()=>{throw Object.assign(Error('Receiver rejected token'),{code:'CALL_EXCEPTION'});};
+ let single=0;f.chain.signMint=async()=>{single++;return {raw:'single',hash:'0xsingle'};};
+ await mintNext(f.DB,f.chain);assert.equal(single,1);
+ const jobs=f.sqlite.prepare('SELECT status,raw_tx FROM jobs').all();assert.equal(jobs.filter(job=>job.status==='submitted').length,1);assert.equal(jobs.filter(job=>job.status==='pending').length,1);
+});
+
+test('batch selection accounts for unindexed external mints before signing',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin);
+ for(const wallet of [f.participant,f.outsider])await f.request('/admin/events/1/mint',{wallet:wallet.address},admin);
+ const original=f.chain.event;f.chain.event=async()=>({...await original(),minted:1n});
+ f.chain.signMintBatch=async jobs=>{assert.equal(jobs.length,1);return {raw:'one',hash:'0xone'};};
+ await mintNext(f.DB,f.chain);const rows=f.sqlite.prepare('SELECT status FROM jobs').all();assert.equal(rows.filter(row=>row.status==='submitted').length,1);assert.equal(rows.filter(row=>row.status==='failed').length,1);
+});
+
+test('superadmin event cards count only pending requests and refresh after a review',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),organizer=await f.login(f.organizer);
+ const row=await(await f.request('/events/1/requests',{permanentConsent:true},await f.login(f.participant))).json();
+ const list=async()=> (await(await f.request('/admin/events',undefined,admin)).json()).events[0];
+ assert.equal((await list()).pendingRequests,1);
+ const own=await(await f.request('/organizer/events',undefined,organizer)).json();assert.equal('pendingRequests' in own.events[0],false);
+ await f.request(`/admin/events/1/requests/${row.id}/reject`,{},admin);assert.equal((await list()).pendingRequests,0);
+});
+
+test('a participant can read their confirmed request token ID without admin access',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const participant=await f.login(f.participant),admin=await f.login(f.admin);
+ const row=await(await f.request('/events/1/requests',{permanentConsent:true},participant)).json();
+ await f.request(`/admin/events/1/requests/${row.id}/accept`,{},admin);
+ f.sqlite.exec("UPDATE jobs SET status='confirmed',token_id='77'");
+ const mine=await(await f.request('/my/requests',undefined,participant)).json();assert.equal(mine.rows[0].token_id,'77');assert.equal(mine.rows[0].mint_status,'confirmed');
+ assert.equal((await(await f.request('/my/requests',undefined,await f.login(f.outsider))).json()).rows.length,0);
 });

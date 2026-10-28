@@ -28,6 +28,7 @@
     <nav id="mobile-nav" class="mobile-nav" aria-label="Mobile navigation" hidden>
         <a href="#events">Events</a><a href="#gallery">Gallery</a><a href="#organize">Create</a><a href="#about/proof">About</a><a href="#builders/documentation">Builders</a>
       </nav>
+    <div id="admin-profile" class="admin-profile wrap" role="status" hidden><span><strong>Superadmin profile</strong> · You can review POAP requests and manage all events.</span><a class="button button-small button-dark" href="#admin">Events & requests ↗</a></div>
     <div class="network-notice"><span><i class="status-dot" aria-hidden="true"></i> <span data-network-name>Network loading…</span></span><p>Your moments. Your wallet. Your little proof of life.</p><a href="#builders/documentation">READ THE DOCUMENTATION ↗</a></div>
     <div id="connection-state" class="connection-banner" role="status" aria-live="polite" hidden></div>
     <div id="request-error" class="connection-banner recovery-banner" role="alert" hidden></div>
@@ -66,9 +67,9 @@
       </section>
       <section id="create" class="create-section wrap" data-home><div class="create-doodle" aria-hidden="true"><svg viewBox="0 0 140 150"><path d="M34 112C1 89 20 60 41 71 7 43 32 19 53 43 40 1 81-1 82 38c15-33 50-12 30 19 39-7 41 29 7 35 30 20 3 48-21 28 1 34-35 34-39 6-23 24-45 0-25-14Z"/><path d="M52 76v11m26-13v11m-29 12q18 21 36-2"/></svg></div><p class="eyebrow">CALLING ALL MEMORY-MAKERS</p><svg class="moving-doodle create-spark doodle-spark" viewBox="0 0 90 90" aria-hidden="true"><path d="m45 5 8 27 27 8-27 9-8 28-9-28-28-9 28-8Z"/></svg><h2>Make it a moment.<br /><span class="display-accent">Make it a POAP.</span></h2><p>You bring the people. We’ll bring the little keepsake.</p><button class="button button-dark" id="create-button">Make something worth keeping <span aria-hidden="true">↗</span></button><span class="handwritten create-note">for your next big little thing ♡</span></section>
     </main>
-    <footer class="site-footer wrap"><a class="footer-wordmark" href="#" aria-label="Back to top"><span class="footer-logo" aria-hidden="true"></span></a><div class="footer-bottom"><span>A little proof of a life well lived.</span><span>KAIRO · SOULBOUND COLLECTIBLES · <span data-network-name>Network loading…</span></span><a href="#">BACK TO THE GOOD STUFF ↑</a></div></footer>
+    <footer class="site-footer wrap"><a class="footer-wordmark" href="#" aria-label="Back to top"><span class="footer-logo" aria-hidden="true"></span></a><div class="footer-bottom"><span>A little proof of a life well lived.</span><span>KAIRO · SOULBOUND COLLECTIBLES · <span data-network-name>Network loading…</span></span><a href="#admin/login">SUPER ADMIN</a><a href="#">BACK TO THE GOOD STUFF ↑</a></div></footer>
     <dialog id="modal" class="modal" aria-label="Kairo details"><button type="button" class="modal-close" aria-label="Close dialog">×</button><div id="modal-body"></div></dialog>
     <div id="toast" class="toast" role="status"></div>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=20"></script>
   </body>
 </html>

@@ -6,6 +6,8 @@ import { PAGE_HEADERS, SVG_POLICY } from './security.js';
 import { generateBadge } from './artwork.js';
 import { connectChain } from './chain.js';
 import { MintCoordinator } from './mint.js';
+import { domainRoutes } from './events.js';
+import { mediaBaseURL, metadataKey, displayMediaURL } from './media.js';
 export { MintCoordinator };
 
 const eventId = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -13,26 +15,12 @@ const address = z.string().transform((value, ctx) => {
   try { const result = getAddress(value); if (result === ZeroAddress) throw Error(); return result; }
   catch { ctx.addIssue({ code: 'custom', message: 'Enter a valid Ethereum wallet address' }); return z.NEVER; }
 });
-const roleArtwork = z.object({cap:z.number().int().min(1).max(10000).optional(),role:z.string().trim().min(1).max(40), image:z.string().url().max(300), uri:z.string().url().max(300), animationUrl:z.string().url().max(300).optional()});
-const eventDetails = z.object({ claimMode: z.enum(['attendance','qr']).default('attendance'), id: eventId, title: z.string().trim().min(3).max(100),
-  description: z.string().trim().min(3).max(1000), club: z.string().trim().min(2).max(80),
-  category: z.enum(['Technology', 'Arts', 'Community', 'Sports', 'Hackathon', 'Workshop', 'Fest', 'Seminar', 'Club', 'Competition', 'Other']),
-  campus: z.string().trim().max(100).default(''), eligibility: z.string().trim().max(500).default('Open to campus participants with a college ID'),
-  roles: z.array(z.string().trim().min(1).max(40)).min(1).max(8).default(['Attendee']), venue: z.string().trim().min(2).max(150),
-  eventStartsAt: z.number().int().positive().optional(), eventEndsAt: z.number().int().positive().optional(),
-  draftId: z.string().uuid().optional(), animationUrl: z.string().url().max(300).optional(),
-  image: z.string().max(300), uri: z.string().max(300), rsvpDeadline: z.number().int().positive() });
+const categories = ['Technology','Arts','Community','Sports','Hackathon','Workshop','Fest','Seminar','Club','Competition','Other'];
 const json = (data, status = 200) => Response.json(data, { status });
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const now = () => Math.floor(Date.now() / 1000);
 export async function digest(value) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), b => b.toString(16).padStart(2, '0')).join('');
-}
-async function studentHash(secret, value) {
-  if (!secret || secret.length < 32) throw new HttpError(503, 'Registration is not configured');
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const bytes = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value.trim().toLowerCase()));
-  return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
 }
 async function body(request, max = 16384) {
   if (Number(request.headers.get('content-length') || 0) > max) throw new HttpError(413, 'Request is too large');
@@ -58,23 +46,25 @@ async function user(request, env) {
 async function limit(request, env, route) {
   const ip = request.headers.get('cf-connecting-ip') || 'local';
   const bucket = Math.floor(now() / 60);
-  const key = await digest(`${env.STUDENT_HASH_SECRET}:${ip}:${route}:${bucket}`);
+  const key = await digest(`${env.QR_HMAC_SECRET}:${ip}:${route}:${bucket}`);
   const row = await env.DB.prepare(`INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?)
     ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count`).bind(key, now() + 120).first();
   if (row.count > 20) throw new HttpError(429, 'Too many requests. Please try again in a minute');
 }
-function publicEvent(row) {
+function eventRecord(row) {
   return { id: row.id, groupId: row.group_id || null, title: row.title, description: row.description, club: row.club, category: row.category,
-    campus: row.campus || '', eligibility: row.eligibility, roles: JSON.parse(row.roles || '["Attendee"]'),
+    campus: row.campus || '', roles: JSON.parse(row.roles || '["Attendee"]'),
     venue: row.venue, image: row.image, uri: row.uri, animationUrl: row.animation_url || null, startsAt: row.event_starts_at ?? row.starts_at, endsAt: row.event_ends_at ?? row.ends_at,
     mintStartsAt: row.starts_at, mintEndsAt: row.ends_at, dropId: row.id,
-    claimMode: row.claim_mode || 'attendance', rsvpDeadline: row.rsvp_deadline, cap: row.cap, organizer: row.organizer };
+    approximateAttendees:row.approximate_attendees, verified:Boolean(row.verified), paused:Boolean(row.paused), listed:Boolean(row.listed), cap:row.cap, organizer:row.organizer };
 }
 
 export function createHandler(chainFactory = connectChain) {
   return async function handle(request, env) {
     const url = new URL(request.url); const path = url.pathname;
+    const publicEvent=row=>({...eventRecord(row),image:displayMediaURL(row.image,env,url),animationUrl:displayMediaURL(row.animation_url,env,url)||null});
     try {
+      if (path === '/favicon.ico') return Response.redirect(new URL('/favicon.svg',url),302);
       if (path.startsWith('/media/')) {
         const key = path.slice(7);
         if (!/^(art|video|metadata)\/[a-f0-9]{64}\.(png|jpg|svg|mp4|webm|json)$/.test(key)) throw new HttpError(404, 'Not found');
@@ -94,24 +84,20 @@ export function createHandler(chainFactory = connectChain) {
         checkConfig(env);
         const chainId = Number(env.CHAIN_ID);
         return json({chainId, chainName:env.CHAIN_NAME, contractAddress:env.CONTRACT_ADDRESS,
-          issuerAddress:env.ISSUER_ADDRESS || null, publicRpcUrl:env.PUBLIC_RPC_URL, explorerUrl:env.EXPLORER_URL,
-          categories:eventDetails.shape.category.options,
+          superAdminAddress:env.SUPER_ADMIN_ADDRESS, issuerAddress:env.ISSUER_ADDRESS || null, publicRpcUrl:env.PUBLIC_RPC_URL, explorerUrl:env.EXPLORER_URL,
+          mediaBaseUrl:mediaBaseURL(env,url),categories, emailRetentionDays:Number(env.EMAIL_RETENTION_DAYS || 30), eventsPerDay:Number(env.EVENTS_PER_WALLET_PER_DAY || 5),
           walletNetwork:{chainId:`0x${chainId.toString(16)}`,chainName:env.CHAIN_NAME,
             nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:[env.PUBLIC_RPC_URL],blockExplorerUrls:[env.EXPLORER_URL]}});
       }
       if (path === '/api/events' && request.method === 'GET') {
-        const { results } = await env.DB.prepare(`SELECT e.*,COUNT(r.id) AS rsvp_count FROM events e
-          LEFT JOIN registrations r ON r.event_id=e.id GROUP BY e.id ORDER BY e.starts_at DESC LIMIT 200`).all();
-        return json(results.map(row => ({ ...publicEvent(row), remaining: row.cap === 0 ? null : row.cap - row.rsvp_count })));
+        const {results} = await env.DB.prepare("SELECT e.*,e.cap-COALESCE(SUM(j.status!='failed'),0) AS remaining FROM events e LEFT JOIN claims c ON c.event_id=e.id LEFT JOIN jobs j ON j.id=c.id WHERE e.listed=1 GROUP BY e.id ORDER BY e.starts_at DESC LIMIT 200").all();
+        return json(results.map(row=>({...publicEvent(row),remaining:Math.max(0,row.remaining)})));
       }
       if (path === '/api/auth/challenge' && request.method === 'POST') {
         const id = crypto.randomUUID();
         const site = ['localhost','127.0.0.1','[::1]'].includes(url.hostname) ? url.origin : env.SITE_ORIGIN || url.origin;
-        const input = z.object({ wallet: address.optional() }).parse(await body(request));
-        // shortcut: accept cached clients without a wallet field until all clients use SIWE.
-        const message = input.wallet
-          ? `${new URL(site).host} wants you to sign in with your Ethereum account:\n${input.wallet}\n\nSign in to Kairo to collect POAPs on Sepolia. No transaction, gas payment, or token approval.\n\nURI: ${site}\nVersion: 1\nChain ID: 11155111\nNonce: ${id.replaceAll('-', '')}\nIssued At: ${new Date().toISOString()}\nExpiration Time: ${new Date((now() + 600) * 1000).toISOString()}`
-          : `Sign in to Kairo at ${site}.\n\nConnect your wallet to collect POAPs on Sepolia.\nThis signature does not send a transaction or cost gas.\nValid for 10 minutes.\n\nRequest reference: ${id}`;
+        const input = z.object({ wallet: address }).parse(await body(request));
+        const message = `${new URL(site).host} wants you to sign in with your Ethereum account:\n${input.wallet}\n\nSign in to Kairo. No gas payment or token approval.\n\nURI: ${site}\nVersion: 1\nChain ID: 11155111\nNonce: ${id.replaceAll('-', '')}\nIssued At: ${new Date().toISOString()}\nExpiration Time: ${new Date((now()+600)*1000).toISOString()}`;
         await env.DB.prepare('INSERT INTO challenges VALUES(?,?,?)').bind(id, message, now() + 600).run();
         return json({ id, message });
       }
@@ -131,8 +117,8 @@ export function createHandler(chainFactory = connectChain) {
           'set-cookie': `kairo_session=${token}; HttpOnly; SameSite=Strict; Path=/${url.protocol === 'https:' ? '; Secure' : ''}` } });
       }
       if (path === '/api/auth/me') {
-        const wallet = await user(request, env); const chain = await chainFactory(env);
-        return json({ wallet, admin: await chain.admin(wallet) });
+        const wallet = await user(request, env);
+        return json({ wallet, admin: Boolean(env.SUPER_ADMIN_ADDRESS && wallet.toLowerCase() === env.SUPER_ADMIN_ADDRESS.toLowerCase()) });
       }
       if (path === '/api/auth/logout' && request.method === 'POST') {
         const cookie = request.headers.get('cookie')?.match(/kairo_session=([a-f0-9]{64})/)?.[1];
@@ -141,6 +127,7 @@ export function createHandler(chainFactory = connectChain) {
       }
       if (path === '/api/artwork' && request.method === 'POST') {
         await user(request, env);
+        const artworkBase=mediaBaseURL(env,url);
         const input = z.object({ name: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(1000),
           role:z.string().trim().min(1).max(40).optional(), image: z.string().max(2800000).optional(), video: z.string().max(14000000).optional() }).parse(await body(request, 17000000));
         let bytes, extension, contentType;
@@ -158,8 +145,9 @@ export function createHandler(chainFactory = connectChain) {
           extension = match[1] === 'png' ? 'png' : 'jpg'; contentType = `image/${match[1]}`;
         }
         const hash = await digest(input.image || new TextDecoder().decode(bytes));
-        const image = `${url.origin}/media/art/${hash}.${extension}`;
-        await env.MEDIA.put(image.split('/media/')[1], bytes, { httpMetadata: { contentType } });
+        const imageKey=`art/${hash}.${extension}`;
+        const image = `${artworkBase}${imageKey}`;
+        await env.MEDIA.put(imageKey, bytes, { httpMetadata: { contentType,cacheControl:'public, max-age=31536000, immutable' } });
         let animationUrl;
         if (input.video) {
           const match = input.video.match(/^data:video\/(mp4|webm);base64,([A-Za-z0-9+/=]+)$/);
@@ -169,199 +157,16 @@ export function createHandler(chainFactory = connectChain) {
           const valid = match[1] === 'mp4' ? [102,116,121,112].every((v,i) => videoBytes[i+4] === v) : [26,69,223,163].every((v,i) => videoBytes[i] === v);
           if (videoBytes.length < 16 || videoBytes.length > 10 * 1024 * 1024 || !valid) throw new HttpError(400, 'Invalid video or video exceeds 10 MB');
           const videoKey = `video/${await digest(input.video)}.${match[1]}`;
-          await env.MEDIA.put(videoKey, videoBytes, { httpMetadata: {contentType: `video/${match[1]}`} });
-          animationUrl = `${url.origin}/media/${videoKey}`;
+          await env.MEDIA.put(videoKey, videoBytes, { httpMetadata: {contentType: `video/${match[1]}`,cacheControl:'public, max-age=31536000, immutable'} });
+          animationUrl = `${artworkBase}${videoKey}`;
         }
         const metadata = JSON.stringify({ name: input.name, description: input.description, image, ...(input.role ? {attributes:[{trait_type:'Role',value:input.role}]} : {}), ...(animationUrl ? {animation_url: animationUrl} : {}) });
         const key = `metadata/${await digest(metadata)}.json`;
-        await env.MEDIA.put(key, metadata, { httpMetadata: { contentType: 'application/json' } });
-        return json({ image, uri: `${url.origin}/media/${key}`, ...(animationUrl ? {animationUrl} : {}) });
+        await env.MEDIA.put(key, metadata, { httpMetadata: { contentType: 'application/json',cacheControl:'public, max-age=31536000, immutable' } });
+        return json({ image, uri: `${artworkBase}${key}`, ...(animationUrl ? {animationUrl} : {}) });
       }
-      if (path === '/api/organizer/events' && request.method === 'GET') {
-        const wallet = await user(request, env);
-        const {results} = await env.DB.prepare('SELECT d.*,(SELECT json_group_array(json(e.roles)) FROM events e WHERE e.group_id=d.id) AS published_roles FROM organizer_drafts d WHERE wallet=? ORDER BY updated_at DESC LIMIT 100').bind(wallet).all();
-        return json(results.map(({published_roles,...row}) => ({...row,details:JSON.parse(row.details),publishedRoles:JSON.parse(published_roles).flat()})));
-      }
-      if (path === '/api/organizer/review' && request.method === 'GET') {
-        const wallet = await user(request, env); const chain = await chainFactory(env);
-        if (!await chain.admin(wallet)) throw new HttpError(403, 'Only the college admin may review events');
-        const {results} = await env.DB.prepare("SELECT d.*,(SELECT json_group_array(json(e.roles)) FROM events e WHERE e.group_id=d.id) AS published_roles FROM organizer_drafts d WHERE status='submitted' ORDER BY updated_at LIMIT 100").all();
-        return json(results.map(({published_roles,...row}) => ({...row,details:JSON.parse(row.details),publishedRoles:JSON.parse(published_roles).flat()})));
-      }
-      if (path === '/api/organizer/events' && request.method === 'POST') {
-        const wallet = await user(request, env);
-        const input = eventDetails.omit({id: true, draftId: true}).extend({
-          id: z.string().uuid().optional(), organizer: address.optional(), cap: z.number().int().min(0).max(10000),
-          mintStartsAt: z.number().int().positive(), mintEndsAt: z.number().int().positive(),
-          eventStartsAt: z.number().int().positive(), eventEndsAt: z.number().int().positive(),
-          roleArtwork:z.array(roleArtwork).min(1).max(8).optional(), submit: z.boolean().default(false)
-        }).parse(await body(request));
-        if (input.eventStartsAt >= input.eventEndsAt || input.mintStartsAt < input.eventStartsAt || input.mintStartsAt >= input.mintEndsAt || input.mintEndsAt < input.eventEndsAt || input.rsvpDeadline > input.eventStartsAt) throw new HttpError(400, 'Check the event, registration and minting schedule');
-        const key = input.uri.startsWith(`${url.origin}/media/metadata/`) ? input.uri.split('/media/')[1] : '';
-        if (!/^metadata\/[a-f0-9]{64}\.json$/.test(key)) throw new HttpError(400, 'Save collectible artwork first');
-        const object = await env.MEDIA.get(key); const metadata = object && await object.json();
-        if (!metadata || metadata.name !== input.title || metadata.description !== input.description || metadata.image !== input.image || metadata.animation_url !== input.animationUrl) throw new HttpError(409, 'Collectible metadata does not match the event');
-        if (input.roleArtwork) {
-          if (new Set(input.roles).size !== input.roles.length || input.roleArtwork.length !== input.roles.length || input.roles.some(role => !input.roleArtwork.some(art => art.role === role))) throw new HttpError(400, 'Provide one design for each participation role');
-          if (input.uri !== input.roleArtwork[0].uri || input.image !== input.roleArtwork[0].image) throw new HttpError(409, 'The event cover must match its first role design');
-          for (const art of input.roleArtwork) {
-            const key = art.uri.startsWith(`${url.origin}/media/metadata/`) ? art.uri.split('/media/')[1] : '';
-            if (!/^metadata\/[a-f0-9]{64}\.json$/.test(key)) throw new HttpError(400, 'Save each role design first');
-            const object = await env.MEDIA.get(key), metadata = object && await object.json();
-            if (!metadata || metadata.name !== input.title || metadata.description !== input.description || metadata.image !== art.image || metadata.animation_url !== art.animationUrl || !metadata.attributes?.some(trait => trait.trait_type === 'Role' && trait.value === art.role)) throw new HttpError(409, 'Role artwork differs from its frozen metadata');
-          }
-        }
-        const id = input.id || crypto.randomUUID();
-        const previous = await env.DB.prepare('SELECT wallet,status FROM organizer_drafts WHERE id=?').bind(id).first();
-        if (input.id && (!previous || previous.wallet !== wallet)) throw new HttpError(403, 'This event draft belongs to another organizer');
-        if (previous?.status === 'published' || (previous && await env.DB.prepare('SELECT id FROM events WHERE group_id=? LIMIT 1').bind(id).first())) throw new HttpError(409, 'Published or partially published events cannot be edited');
-        if (!previous) {
-          const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM organizer_drafts WHERE wallet=?').bind(wallet).first();
-          if (count.count >= 100) throw new HttpError(409, 'Organizer workspace limit reached');
-        }
-        const {id: ignored, submit, ...details} = input;
-        const status = submit ? 'submitted' : 'draft';
-        const saved = await env.DB.prepare(`INSERT INTO organizer_drafts(id,wallet,details,status,created_at,updated_at) VALUES(?,?,?,?,?,?)
-          ON CONFLICT(id) DO UPDATE SET details=excluded.details,status=excluded.status,updated_at=excluded.updated_at WHERE organizer_drafts.wallet=excluded.wallet AND organizer_drafts.status!='published'`).bind(id,wallet,JSON.stringify({...details,organizer:details.organizer || wallet}),status,now(),now()).run();
-        if (saved.meta.changes !== 1) throw new HttpError(409, 'This event was already published');
-        return json({id,status}, previous ? 200 : 201);
-      }
-      if (path === '/api/events' && request.method === 'POST') {
-        const wallet = await user(request, env); const chain = await chainFactory(env);
-        if (!await chain.admin(wallet)) throw new HttpError(403, 'Only the college admin may publish events');
-        const input = eventDetails.parse(await body(request)); const event = await chain.event(input.id);
-        const metadataKey = input.uri.startsWith(`${url.origin}/media/metadata/`) ? input.uri.split('/media/')[1] : '';
-        if (!event.cap || event.uri !== input.uri || !/^metadata\/[a-f0-9]{64}\.json$/.test(metadataKey)) throw new HttpError(409, 'Event does not match its on-chain metadata');
-        const stored = await env.MEDIA.get(metadataKey);
-        if (!stored) throw new HttpError(409, 'Metadata is missing');
-        const metadata = await stored.json();
-        if (metadata.name !== input.title || metadata.description !== input.description || metadata.image !== input.image || metadata.animation_url !== input.animationUrl) throw new HttpError(409, 'Artwork differs from the frozen collectible');
-        const published = await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(input.id).first();
-        if (published) {
-          if (published.uri !== input.uri || published.title !== input.title || published.description !== input.description || published.club !== input.club || published.category !== input.category || published.venue !== input.venue || published.rsvp_deadline !== input.rsvpDeadline || published.claim_mode !== input.claimMode || published.campus !== input.campus || published.eligibility !== input.eligibility || published.roles !== JSON.stringify(input.roles)) throw new HttpError(409, 'This event is already published with different details');
-          return json({ id: input.id });
-        }
-        if (input.rsvpDeadline > Number(event.endsAt) || input.rsvpDeadline <= 0) throw new HttpError(400, 'Invalid RSVP deadline');
-        const eventStart = input.eventStartsAt ?? Number(event.startsAt);
-        const eventEnd = input.eventEndsAt ?? Number(event.endsAt);
-        if (eventStart >= eventEnd || eventStart > Number(event.startsAt) || eventEnd > Number(event.endsAt) || (input.eventStartsAt && input.rsvpDeadline > eventStart)) throw new HttpError(400, 'Invalid event and minting schedule');
-        const organizer = await chain.contract.eventAdmin(input.id);
-        let roleCount = 1;
-        if (input.draftId) {
-          const draft = await env.DB.prepare('SELECT * FROM organizer_drafts WHERE id=?').bind(input.draftId).first();
-          const details = draft && JSON.parse(draft.details);
-          const art = details?.roleArtwork?.find(art => input.roles.length === 1 && art.role === input.roles[0]);
-          if (!draft || draft.status !== 'submitted' || (details.organizer || draft.wallet) !== organizer || (details.roleArtwork ? art?.uri : details.uri) !== input.uri) throw new HttpError(409, 'Organizer submission does not match the on-chain event');
-          if (details.roleArtwork) {
-            for (const key of ['title','description','club','category','venue','campus','eligibility','rsvpDeadline','claimMode','eventStartsAt','eventEndsAt']) if (input[key] !== details[key]) throw new HttpError(409, 'Publish the submitted event details unchanged');
-            if (Number(event.startsAt) !== details.mintStartsAt || Number(event.endsAt) !== details.mintEndsAt || (event.cap === 18446744073709551615n ? 0 : Number(event.cap)) !== (art.cap ?? details.cap)) throw new HttpError(409, 'On-chain drop differs from the submitted schedule or capacity');
-            roleCount = details.roleArtwork.length;
-          }
-        }
-        const listing = env.DB.prepare(`INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,rsvp_deadline,cap,organizer,created_at,event_starts_at,event_ends_at,claim_mode,campus,eligibility,roles,animation_url,group_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(input.id, input.title,
-          input.description, input.club, input.category, input.venue, input.image, input.uri, Number(event.startsAt),
-          Number(event.endsAt), input.rsvpDeadline, event.cap === 18446744073709551615n ? 0 : Number(event.cap), organizer, now(), eventStart, eventEnd, input.claimMode, input.campus, input.eligibility, JSON.stringify(input.roles), input.animationUrl || null, input.draftId || null);
-        await env.DB.batch([listing,...(input.draftId ? [env.DB.prepare("UPDATE organizer_drafts SET status='published',event_id=?,updated_at=? WHERE id=? AND (SELECT COUNT(*) FROM events WHERE group_id=?)=?").bind(input.id,now(),input.draftId,input.draftId,roleCount)] : [])]);
-        return json({ id: input.id }, 201);
-      }
-      const claim = path.match(/^\/api\/events\/(\d+)\/claim$/);
-      if (claim && request.method === 'POST') {
-        const id = eventId.parse(claim[1]);
-        const wallet = await user(request, env);
-        z.object({ permanentConsent: z.literal(true) }).parse(await body(request));
-        const listing = await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
-        if (listing?.claim_mode !== 'qr') throw new HttpError(403, 'This drop requires staff attendance verification');
-        const chain = await chainFactory(env); const event = await chain.event(id);
-        if (!event.cap || event.paused || now() < Number(event.startsAt) || now() > Number(event.endsAt)) throw new HttpError(409, 'Minting is closed or paused');
-        const ticket = crypto.randomUUID();
-        const hash = await studentHash(env.STUDENT_HASH_SECRET, 'qr-wallet:' + wallet.toLowerCase());
-        await env.DB.batch([
-          env.DB.prepare(`INSERT OR IGNORE INTO registrations(id,event_id,student_hash,wallet,consent_at,claimed_at)
-            SELECT ?,?,?,?,?,? WHERE (?=0 OR (SELECT COUNT(*) FROM registrations WHERE event_id=?) < ?)`)
-            .bind(ticket,id,hash,wallet,now(),now(),listing.cap,id,listing.cap),
-          env.DB.prepare('UPDATE registrations SET claimed_at=COALESCE(claimed_at,?) WHERE event_id=? AND wallet=?').bind(now(),id,wallet),
-          env.DB.prepare(`INSERT OR IGNORE INTO jobs(id,created_at) SELECT id,? FROM registrations WHERE event_id=? AND wallet=? AND claimed_at IS NOT NULL`).bind(now(),id,wallet)
-        ]);
-        const row = await env.DB.prepare(`SELECT r.id,r.wallet,j.status,j.tx_hash,j.token_id FROM registrations r JOIN jobs j ON j.id=r.id WHERE r.event_id=? AND r.wallet=?`).bind(id,wallet).first();
-        if (!row) throw new HttpError(409, 'All claims for this drop are taken');
-        await env.MINT.get(env.MINT.idFromName('sepolia-issuer')).fetch(new Request('https://mint.internal/wake',{method:'POST'}));
-        return json({ticket:row.id,wallet:row.wallet,status:row.status,txHash:row.tx_hash,tokenId:row.token_id},202);
-      }
-      const rsvp = path.match(/^\/api\/events\/(\d+)\/rsvp$/);
-      if (rsvp && request.method === 'POST') {
-        const id = eventId.parse(rsvp[1]);
-        const wallet = await user(request, env);
-        const input = z.object({studentId:z.string().trim().min(2).max(100),wallet:address.optional(),
-          permanentConsent:z.literal(true),role:z.literal('Attendee').optional()}).parse(await body(request));
-        if (input.wallet && input.wallet !== wallet) throw new HttpError(403, 'RSVP only for your signed-in wallet');
-        const event = await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
-        if (!event || event.rsvp_deadline < now()) throw new HttpError(409, 'Registration is closed');
-        const roles = JSON.parse(event.roles);
-        if (!roles.includes('Attendee') && !(event.group_id && roles.length === 1)) throw new HttpError(403, 'This event requires an organizer-granted role');
-        const requestedRole = event.group_id && roles.length === 1 ? roles[0] : 'Attendee';
-        const hash = await studentHash(env.STUDENT_HASH_SECRET, input.studentId);
-        const ticket = crypto.randomUUID();
-        const inserted = await env.DB.prepare(`INSERT INTO registrations(id,event_id,student_hash,wallet,consent_at,participation_role)
-          SELECT ?,?,?,?,?,? WHERE (? = 0 OR (SELECT COUNT(*) FROM registrations WHERE event_id=?) < ?) RETURNING id`)
-          .bind(ticket, id, hash, wallet, now(), requestedRole, event.cap, id, event.cap).first();
-        if (!inserted) throw new HttpError(409, 'This event is full');
-        return json({ticket, wallet, eventId:id}, 201);
-      }
-      const ticket = path.match(/^\/api\/tickets\/([a-f0-9-]{36})$/);
-      if (ticket && request.method === 'GET') {
-        const row = await env.DB.prepare(`SELECT r.id,r.event_id,r.wallet,r.participation_role,r.checked_in_at,r.claimed_at,j.status,j.tx_hash,j.token_id,j.error
-          FROM registrations r LEFT JOIN jobs j ON j.id=r.id WHERE r.id=?`).bind(ticket[1]).first();
-        if (!row) throw new HttpError(404, 'Ticket not found');
-        return json(row);
-      }
-      const attendees = path.match(/^\/api\/events\/(\d+)\/attendees$/);
-      if (attendees && request.method === 'GET') {
-        const id = eventId.parse(attendees[1]); const wallet = await user(request, env); const chain = await chainFactory(env);
-        if (!await chain.staff(id, wallet)) throw new HttpError(403, 'You are not staff for this event');
-        const { results } = await env.DB.prepare(`SELECT r.id,r.wallet,r.participation_role,r.consent_at,r.checked_in_at,r.checked_in_by,r.claimed_at,j.status,j.tx_hash,j.token_id,j.error
-          FROM registrations r LEFT JOIN jobs j ON j.id=r.id WHERE r.event_id=? ORDER BY r.consent_at DESC LIMIT 1000`).bind(id).all();
-        return json(results);
-      }
-      const retry = path.match(/^\/api\/tickets\/([a-f0-9-]{36})\/retry$/);
-      if (retry && request.method === 'POST') {
-        const wallet = await user(request, env);
-        const row = await env.DB.prepare('SELECT * FROM registrations WHERE id=?').bind(retry[1]).first();
-        if (!row?.checked_in_at && !row?.claimed_at) throw new HttpError(409, 'Attendance must already be verified');
-        const chain = await chainFactory(env);
-        if (!await chain.staff(row.event_id, wallet)) throw new HttpError(403, 'You are not staff for this event');
-        const result = await env.DB.prepare("UPDATE jobs SET status='pending',raw_tx=NULL,tx_hash=NULL,error=NULL,attempts=0 WHERE id=? AND status='failed' RETURNING id").bind(row.id).first();
-        if (!result) throw new HttpError(409, 'Only failed mint jobs can be retried');
-        await env.MINT.get(env.MINT.idFromName('sepolia-issuer')).fetch(new Request('https://mint.internal/wake', { method: 'POST' }));
-        return json({ status: 'pending' }, 202);
-      }
-      const checkIn = path.match(/^\/api\/tickets\/([a-f0-9-]{36})\/check-in$/);
-      if (checkIn && request.method === 'POST') {
-        const wallet = await user(request, env);
-        const input = z.object({ physicallyVerified: z.literal(true), studentId: z.string().trim().min(2).max(100) }).parse(await body(request));
-        const row = await env.DB.prepare('SELECT * FROM registrations WHERE id=?').bind(checkIn[1]).first();
-        if (!row) throw new HttpError(404, 'Registration not found');
-        const chain = await chainFactory(env);
-        if (!await chain.staff(row.event_id, wallet)) throw new HttpError(403, 'You are not staff for this event');
-        if (await studentHash(env.STUDENT_HASH_SECRET, input.studentId) !== row.student_hash) throw new HttpError(409, 'College ID does not match this registration');
-        const event = await chain.event(row.event_id);
-        if (!event.cap || event.paused || now() < Number(event.startsAt) || now() > Number(event.endsAt)) throw new HttpError(409, 'Check-in is outside the event mint window');
-        await env.DB.batch([
-          env.DB.prepare('UPDATE registrations SET checked_in_at=COALESCE(checked_in_at,?),checked_in_by=COALESCE(checked_in_by,?) WHERE id=?').bind(now(), wallet, row.id),
-          env.DB.prepare('INSERT OR IGNORE INTO jobs(id,created_at) VALUES(?,?)').bind(row.id, now())
-        ]);
-        const stub = env.MINT.get(env.MINT.idFromName('sepolia-issuer'));
-        await stub.fetch(new Request('https://mint.internal/wake', { method: 'POST' }));
-        const job = await env.DB.prepare('SELECT status,tx_hash,token_id,error FROM jobs WHERE id=?').bind(row.id).first();
-        return json({ ...job, ticket: row.id }, 202);
-      }
-      const cancel = path.match(/^\/api\/tickets\/([a-f0-9-]{36})\/cancel$/);
-      if (cancel && request.method === 'POST') {
-        const wallet = await user(request, env);
-        const result = await env.DB.prepare(`DELETE FROM registrations WHERE id=? AND wallet=?
-          AND checked_in_at IS NULL AND claimed_at IS NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=registrations.id) RETURNING id`).bind(cancel[1], wallet).first();
-        if (!result) throw new HttpError(409, 'Only your unverified RSVP can be cancelled; issued collectibles are permanent');
-        return json({ cancelled: true });
-      }
+      const response = await domainRoutes(request,env,chainFactory,{user,body,HttpError,digest,publicEvent,categories});
+      if (response) return response;
       if (path === '/api/wallet-collection' && request.method === 'GET') {
         const wallet = address.parse(url.searchParams.get('wallet'));
         const cursor = eventId.parse(url.searchParams.get('cursor') || '1');
@@ -369,10 +174,10 @@ export function createHandler(chainFactory = connectChain) {
         const page = await chain.collectionPage(wallet, cursor);
         const items = await Promise.all(page.items.map(async token => {
           const listing = await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(token.id).first();
-          const record = await env.DB.prepare(`SELECT r.checked_in_at,r.checked_in_by,r.claimed_at,r.participation_role,j.tx_hash,j.updated_at
-            FROM registrations r LEFT JOIN jobs j ON j.id=r.id WHERE r.event_id=? AND r.wallet=?`).bind(token.id, wallet).first();
+          const record = await env.DB.prepare(`SELECT r.method,j.tx_hash,j.updated_at
+            FROM claims r LEFT JOIN jobs j ON j.id=r.id WHERE r.event_id=? AND r.wallet=?`).bind(token.id, wallet).first();
           // Only read metadata from the bound bucket; arbitrary token URLs must never become server-side fetches.
-          const key = token.uri.match(/\/media\/(metadata\/[a-f0-9]{64}\.json)$/)?.[1];
+          const key = metadataKey(token.uri,env,url);
           let metadata = null;
           try {
             const object = key ? await env.MEDIA.get(key) : null;
@@ -384,24 +189,24 @@ export function createHandler(chainFactory = connectChain) {
           const matches = listing?.uri === token.uri;
           const recorded = matches ? record : null;
           const history = recorded ? (await env.DB.prepare(`SELECT t.hash,t.created_at FROM mint_transactions t
-            JOIN registrations r ON r.id=t.job_id WHERE r.event_id=? AND r.wallet=? ORDER BY t.created_at`).bind(token.id, wallet).all()).results : [];
+            JOIN claims r ON r.id=t.job_id WHERE r.event_id=? AND r.wallet=? ORDER BY t.created_at`).bind(token.id, wallet).all()).results : [];
           return { ...(matches ? publicEvent(listing) : { id: token.id, startsAt: null, endsAt: null, club: 'Unlisted organization', category: 'Other', venue: 'Not listed' }),
             ...token, title: metadata?.name || (matches ? listing.title : `Kairo collectible #${token.tokenId}`),
-            description: metadata?.description || (matches ? listing.description : ''), image: metadata?.image || (matches ? listing.image : ''),
-            animationUrl: metadata?.animation_url || null,
-            role:recorded?.participation_role || 'Unrecorded',
-            claimMethod:recorded?.checked_in_at && recorded?.checked_in_by ? 'verifier-check-in' : recorded?.claimed_at ? 'static-qr' : null,
-            attendanceVerified: Boolean(recorded?.checked_in_at && recorded?.checked_in_by), issuedAt: recorded?.tx_hash ? recorded.updated_at : null,
+            description: metadata?.description || (matches ? listing.description : ''), image: displayMediaURL(metadata?.image || (matches ? listing.image : ''),env,url),
+            animationUrl: displayMediaURL(metadata?.animation_url,env,url) || null,
+            role:matches ? JSON.parse(listing.roles)[0] : 'Unrecorded',
+            claimMethod:recorded?.method || null,
+            attendanceVerified:false, issuedAt:recorded?.tx_hash ? recorded.updated_at : null,
             transactionHash: recorded?.tx_hash || null, history, ownershipVerified: true,
             metadataStatus: metadata ? 'Available · contract URI verified' : 'Unavailable · ownership verified' };
         }));
-        const pending = await env.DB.prepare(`SELECT COUNT(*) AS count FROM jobs j JOIN registrations r ON r.id=j.id
+        const pending = await env.DB.prepare(`SELECT COUNT(*) AS count FROM jobs j JOIN claims r ON r.id=j.id
           WHERE r.wallet=? AND j.status IN ('pending','submitted')`).bind(wallet).first();
         return json({ ...page, items, pending: pending.count, chainId: 11155111 });
       }
       if (path === '/api/collection' && request.method === 'GET') {
         const wallet = address.parse(url.searchParams.get('wallet'));
-        const { results } = await env.DB.prepare(`SELECT e.*,j.token_id,j.tx_hash FROM registrations r
+        const { results } = await env.DB.prepare(`SELECT e.*,j.token_id,j.tx_hash FROM claims r
           JOIN jobs j ON j.id=r.id JOIN events e ON e.id=r.event_id WHERE r.wallet=? AND j.status='confirmed' ORDER BY e.starts_at DESC`).bind(wallet).all();
         return json(results.map(row => ({ ...publicEvent(row), tokenId: row.token_id, transactionHash: row.tx_hash })));
       }
@@ -409,8 +214,7 @@ export function createHandler(chainFactory = connectChain) {
     } catch (error) {
       if (error instanceof z.ZodError) return json({error:error.issues[0]?.message || 'Invalid input',code:'INVALID_INPUT'},400);
       if (error instanceof HttpError) return json({error:error.message,code:({400:'INVALID_INPUT',401:'AUTH_REQUIRED',403:'FORBIDDEN',404:'NOT_FOUND',409:'CONFLICT',413:'INVALID_INPUT',415:'INVALID_INPUT',429:'RATE_LIMITED',503:'NOT_CONFIGURED'})[error.status] || 'REQUEST_FAILED'},error.status);
-      if (error.message?.includes('Collectible already claimed by this wallet')) return json({error:'You have already claimed this POAP with this wallet',code:'CONFLICT'}, 409);
-      if (error.message?.includes('UNIQUE constraint')) return json({error:'This student or wallet is already registered, or the event is already published',code:'CONFLICT'}, 409);
+      if (error.message?.includes('UNIQUE constraint')) return json({error:'Record already exists. Refresh and retry',code:'CONFLICT'}, 409);
       return errorResponse(error, request, env);
     }
   };
@@ -418,10 +222,11 @@ export function createHandler(chainFactory = connectChain) {
 
 export default {
   async scheduled(controller, env) {
-    // Recover a saved check-in if waking the coordinator failed after the D1 commit.
-    const queued = await env.DB.prepare("SELECT id FROM jobs WHERE status IN ('pending','submitted') LIMIT 1").first();
+    // Recover queued transactions after interrupted requests.
+    const queued = await env.DB.prepare("SELECT id FROM jobs WHERE status IN ('pending','submitted') UNION ALL SELECT id FROM chain_actions WHERE status IN ('pending','submitted') LIMIT 1").first();
     if (queued) await env.MINT.get(env.MINT.idFromName('sepolia-issuer')).fetch(new Request('https://mint.internal/wake', { method: 'POST' }));
     await env.DB.batch([
+      env.DB.prepare('UPDATE links SET email=NULL WHERE email IS NOT NULL AND created_at<?').bind(now()-Number(env.EMAIL_RETENTION_DAYS || 30)*86400),
       env.DB.prepare('DELETE FROM challenges WHERE expires_at<?').bind(now()),
       env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(now()),
       env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<?').bind(now())

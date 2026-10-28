@@ -9,11 +9,11 @@ test('QR claims show only pending status until confirmation, then the minted art
     const statusNode = {};
     const main = { innerHTML: '', querySelector: selector => selector === '#mint-status' && main.innerHTML.includes('id="mint-status"') ? statusNode : null };
     const context = vm.createContext({config:{chainName:'Sepolia'}, main, modalBody: {}, modal: { open: false }, close() {}, clearInterval() {}, setInterval() {}, ticketTimer: null, ticketView: 0,
-      esc: String, artwork: () => '<img src="hacktober.png">', location: { origin: 'https://kairo.test' }, window: {}, config: { contractAddress: 'contract' }, txLink: () => 'https://sepolia.test/tx',
+      date:String,time:String,esc: String, artwork: () => '<img src="hacktober.png">', location: { origin: 'https://kairo.test' }, window: {}, config: { contractAddress: 'contract' }, txLink: () => 'https://sepolia.test/tx',
       api: async () => ({ status, claimed_at: 1, wallet: 'wallet', token_id: '2' }),
     });
     await vm.runInContext(`${showTicket}\nshowTicket('ticket', {claimMode:'qr',title:'Hacktober',description:'A day of building together.',image:'hacktober.png'})`, context);
-    assert.equal(main.innerHTML.includes('POAP Minted'), status === 'confirmed');
+    assert.equal(main.innerHTML.includes('POAP minted!'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('A day of building together.'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('hacktober.png'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('Add to MetaMask'), false);
@@ -25,13 +25,14 @@ test('claim page directs connection to the header; signed-in Mint submits the cl
   const nodes = Object.fromEntries(['claim-mint', 'claim-connect', 'claim-wallet', 'claim-consent','claim-consent-row'].map(id => [id, { checked: true }]));
   const main = { innerHTML: '', querySelector: selector => nodes[selector.slice(1)] };
   let submissions = 0, shown = 0;
-  const context = vm.createContext({config:{chainName:'Sepolia'}, main, modalBody: {}, session: null, connectedWallet: '', esc: String, artwork: () => '<img src="hacktober.png">', window: { ethereum: {} },
+  const context = vm.createContext({config:{chainName:'Sepolia'}, main, modalBody: {}, session: null, connectedWallet: '', date:String,time:String,esc: String, artwork: () => '<img src="hacktober.png">', window: { ethereum: {} },
     busy: async (_, action) => action(), headerConnect: () => {}, signerOnSepolia: async () => {},
     api: async () => context.session, toast() {},
+    location:{href:'https://kairo.test/?qr=token',hash:''},URL,
     post: async path => { assert.equal(path, '/events/2/claim'); submissions++; return { ticket: 'ticket' }; },
-    localStorage: { getItem: () => '[]', setItem() { throw Error('Device storage blocked'); } }, showTicket: async () => { shown++; },
+    showTicket:async()=>{shown++;},
   });
-  vm.runInContext(source.slice(source.indexOf('function claimForm('), source.indexOf('\nfunction rsvpForm(')) + "\nclaimForm({id:2,title:'Hacktober'},true)", context);
+  vm.runInContext(source.slice(source.indexOf('function claimForm('), source.indexOf('\nasync function showTicket(')) + "\nclaimForm({id:2,title:'Hacktober'},true)", context);
   assert.match(main.innerHTML, /id="claim-mint"[^>]*hidden[^>]*disabled/);
   assert.equal(main.innerHTML.includes('hacktober.png'), false);
   await assert.rejects(nodes['claim-mint'].onclick(), /Connect your wallet first/);
@@ -42,13 +43,13 @@ test('claim page directs connection to the header; signed-in Mint submits the cl
   vm.runInContext("claimForm({id:2,title:'Hacktober'},true)",context);
   await nodes['claim-mint'].onclick();
   assert.equal(submissions, 1);
-  assert.equal(shown, 1);
+  assert.equal(context.location.hash,'claim/ticket/2');
 });
 
 test('an explicitly connected authenticated wallet shows Mint without another signature', () => {
   const nodes={};const main={innerHTML:'',querySelector: selector => nodes[selector] ||= {}};
-  const context=vm.createContext({config:{chainName:'Sepolia'},main,connectedWallet:'0xattendee',session:{wallet:'0xattendee'},esc:String,window:{ethereum:{}},busy(){},headerConnect(){}});
-  vm.runInContext(source.slice(source.indexOf('function claimForm('),source.indexOf('\nfunction rsvpForm('))+"\nclaimForm({id:2,title:'Hacktober'},true)",context);
+  const context=vm.createContext({date:String,time:String,config:{chainName:'Sepolia'},main,connectedWallet:'0xattendee',session:{wallet:'0xattendee'},date:String,time:String,esc:String,window:{ethereum:{}},busy(){},headerConnect(){}});
+  vm.runInContext(source.slice(source.indexOf('function claimForm('),source.indexOf('\nasync function showTicket('))+"\nclaimForm({id:2,title:'Hacktober'},true)",context);
   assert.match(main.innerHTML,/Connected: 0xattendee/);
   assert.doesNotMatch(main.innerHTML,/id="claim-mint"[^>]*(hidden|disabled)/);
   assert.match(main.innerHTML,/id="claim-connect"[^>]*hidden/);
@@ -74,7 +75,7 @@ test('a late mint response cannot replace a newer ticket screen', async () => {
   const first=vm.runInContext("showTicket('first',{claimMode:'qr',title:'First'})",context);
   await vm.runInContext("showTicket('second',{claimMode:'qr',title:'Second'})",context);
   resolveFirst({status:'confirmed'});await first;
-  assert(main.innerHTML.includes('Second'));assert(!main.innerHTML.includes('POAP Minted'));
+  assert(main.innerHTML.includes('Second'));assert(!main.innerHTML.includes('POAP minted!'));
 });
 
 test('read-only wallet connection requests accounts without signatures, minting or automatic network changes', async () => {
@@ -120,14 +121,6 @@ test('updateNetwork shows the active network and flags a mismatch and header pla
   const installPos = html.indexOf('id="install-app"');
   const networkPos = html.indexOf('id="wallet-network"');
   assert.ok(walletPos > installPos && walletPos > networkPos, 'wallet address button is on the top right side');
-});
-
-test('closing a ticket dialog prevents its pending API response from reopening it',async()=>{
- let resolveTicket,shows=0;const node={},modal={open:false};
- const body={innerHTML:'',querySelector:selector=>selector==='#mint-status'&&body.innerHTML.includes('id="mint-status"')?node:selector==='#download-ticket'?node:{}};
- const context=vm.createContext({main:{},modalBody:body,modal,show(html){shows++;modal.open=true;body.innerHTML=html;},clearInterval(){},setInterval(){},ticketTimer:null,ticketView:0,esc:String,QRCode:{toCanvas:async()=>{}},location:{origin:'https://kairo.test'},api:()=>new Promise(resolve=>{resolveTicket=resolve;})});
- vm.runInContext(showTicket,context);const pending=vm.runInContext("showTicket('ticket',{title:'A real event'})",context);await new Promise(resolve=>setImmediate(resolve));
- modal.open=false;resolveTicket({status:'confirmed'});await pending;assert.equal(shows,1);assert.equal(modal.open,false);assert(!body.innerHTML.includes('Woo Hoo'));
 });
 
 test('unknown chain is added from runtime configuration and then explicitly switched',async()=>{

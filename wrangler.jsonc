@@ -1,7 +1,9 @@
 {
   "name": "kairo",
   "workers_dev": true,
-  "dev": { "port": 8787 },
+  "dev": {
+    "port": 8787
+  },
   "routes": [],
   "main": "serverless/worker.js",
   "compatibility_date": "2026-10-01",
@@ -14,14 +16,19 @@
     "run_worker_first": true
   },
   "vars": {
-    "CONTRACT_ADDRESS": "0x999524Cb77Db83864DA6FAC42614387921933922",
+    "CONTRACT_ADDRESS": "0x90a2920272dd3852193A79DA621B1Ccc9D093714",
     "MAX_FEE_GWEI": "10",
-    "SITE_ORIGIN": "https://kairo-site-7fb.pages.dev",
-    "ISSUER_ADDRESS": "0xA6db1b3944999e6953532a4EB6031f2B5DC36a26",
+    "SITE_ORIGIN": "https://kairo.aakritigupta7227.workers.dev",
+    "ISSUER_ADDRESS": "0x8C60aF4B93d1e4c14C473F5B9Ffc488cfa2c4E7C",
     "CHAIN_ID": "11155111",
     "CHAIN_NAME": "Sepolia",
     "PUBLIC_RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com",
-    "EXPLORER_URL": "https://sepolia.etherscan.io"
+    "EXPLORER_URL": "https://sepolia.etherscan.io",
+    "SUPER_ADMIN_ADDRESS": "0x4CB1E99035D2812472B2d50DBB590E9C593188bE",
+    "EVENTS_PER_WALLET_PER_DAY": "5",
+    "EMAIL_RETENTION_DAYS": "30",
+    "MEDIA_BASE_URL": "https://kairo.aakritigupta7227.workers.dev/media/",
+    "ARCHIVE_CONTRACT_ADDRESSES": "[\"0x999524Cb77Db83864DA6FAC42614387921933922\"]"
   },
   "d1_databases": [
     {
@@ -34,7 +41,8 @@
   "r2_buckets": [
     {
       "binding": "MEDIA",
-      "bucket_name": "kairo-media"
+      "bucket_name": "kairo-media",
+      "remote": true
     }
   ],
   "durable_objects": {

@@ -22,7 +22,7 @@ export function errorResponse(error, request, env = {}) {
     for (const [key, secret] of Object.entries(env)) if (/SECRET|PRIVATE_KEY|RPC_URL/.test(key) && typeof secret === 'string' && secret) text = text.replaceAll(secret, '[redacted]');
     return text.replace(/https?:\/\/[^\s"<>]+/g,'[url]').replace(/(?:0x)?[a-f0-9]{64}/gi,'[redacted]').slice(0,4000);
   };
-  console.error(JSON.stringify({event:'request_failed',requestId,method:request.method,path:new URL(request.url).pathname.replace(/(\/tickets\/)[^/]+/,'$1[redacted]'),code,
+  console.error(JSON.stringify({event:'request_failed',requestId,method:request.method,path:new URL(request.url).pathname,code,
     error:{name:error?.name,code:error?.code,message:redact(message),cause:redact(error?.cause?.message),stack:redact(error?.stack)}}));
   return Response.json({error:publicMessage,code,requestId}, {status:error instanceof ServiceError ? error.status : 503,headers:{'cache-control':'no-store'}});
 }

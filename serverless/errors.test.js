@@ -4,7 +4,7 @@ import {errorResponse} from './errors.js';
 import {MintCoordinator} from './mint.js';
 test('diagnostic logs retain the failure while redacting keys, secrets and RPC credentials',async t=>{
  const logs=t.mock.method(console,'error',()=>{});const secret='test-private-hashing-secret';const rpc='https://rpc.test/private-token';
- const response=errorResponse(Error(`D1_ERROR: missing table ${secret} ${rpc}`),new Request('https://kairo.test/api/events'),{STUDENT_HASH_SECRET:secret,SEPOLIA_RPC_URL:rpc});
+ const response=errorResponse(Error(`D1_ERROR: missing table ${secret} ${rpc}`),new Request('https://kairo.test/api/events'),{QR_HMAC_SECRET:secret,SEPOLIA_RPC_URL:rpc});
  const data=await response.json();assert.equal(data.code,'DATABASE_ERROR');assert(data.requestId);const output=logs.mock.calls[0].arguments[0];assert(output.includes('missing table'));assert(!output.includes(secret));assert(!output.includes('private-token'));assert(!JSON.stringify(data).includes('missing table'));
 });
 test('Durable Object health is a read-only storage probe',async()=>{
