@@ -13,13 +13,30 @@ async function issue(f,cookie,email='person@example.org') {
 }
 const tokenOf=link=>link.link.split('/').at(-1);
 
-test('only configured SIWE wallet is admin even when the chain grants another wallet rights',async t=>{
+test('only on-chain authorized wallets enter the panel and a revoked delegate loses access',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());
  for(const wallet of [f.admin,f.organizer,f.outsider]) {
   const cookie=await f.login(wallet),me=await(await f.request('/auth/me',undefined,cookie)).json();assert.equal(me.admin,wallet===f.admin);
   assert.equal((await f.request('/admin/events/1',{action:'verify'},cookie)).status,wallet===f.admin?200:403);
  }
+ const delegate=await f.login(f.outsider),original=f.chain.admin;
+ f.chain.admin=async wallet=>wallet.toLowerCase()===f.outsider.address.toLowerCase()||original(wallet);
+ const me=await(await f.request('/auth/me',undefined,delegate)).json();assert.equal(me.admin,true);assert.equal(me.superAdmin,false);
+ assert.equal((await f.request('/admin/events',undefined,delegate)).status,200);
+ f.chain.admin=original;
+ assert.equal((await f.request('/admin/events',undefined,delegate)).status,403);
  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM admin_audit').get().n,1);
+});
+test('a transferred on-chain admin immediately loses the old wallet access',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());
+ const old=await f.login(f.admin),replacement=await f.login(f.participant);
+ f.chain.currentSuperAdmin=f.participant.address;
+ assert.equal((await(await f.request('/auth/me',undefined,old)).json()).admin,false);
+ assert.equal((await f.request('/admin/events',undefined,old)).status,503);
+ assert.equal((await f.request('/admin/events',undefined,replacement)).status,503);
+ f.env.SUPER_ADMIN_ADDRESS=f.participant.address;
+ assert.equal((await(await f.request('/auth/me',undefined,replacement)).json()).admin,true);
+ assert.equal((await f.request('/admin/events',undefined,replacement)).status,200);
 });
 test('SIWE verifies the requested wallet, consumes challenges once, and requires a wallet',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());assert.equal((await f.request('/auth/challenge',{})).status,400);

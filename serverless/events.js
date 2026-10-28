@@ -8,12 +8,13 @@ const idSchema=z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export async function domainRoutes(request,env,chainFactory,helpers) {
  const {user,body,HttpError,digest,publicEvent,categories}=helpers;
  const url=new URL(request.url),path=url.pathname,post=request.method==='POST';
- const admin=wallet=>Boolean(env.SUPER_ADMIN_ADDRESS && wallet.toLowerCase()===env.SUPER_ADMIN_ADDRESS.toLowerCase());
+ let adminChain;
+ const admin=async wallet=>{const chain=await (adminChain??=chainFactory(env));await chain.assertContract();return chain.admin(wallet);};
  const wake=()=>env.MINT.get(env.MINT.idFromName('sepolia-issuer')).fetch(new Request('https://mint.internal/wake',{method:'POST'}));
  async function owner(id,wallet) {
   const event=await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
   if(!event)throw new HttpError(404,'Event not found');
-  if(!admin(wallet)&&event.organizer.toLowerCase()!==wallet.toLowerCase())throw new HttpError(403,'This event belongs to another organizer');
+  if(!await admin(wallet)&&event.organizer.toLowerCase()!==wallet.toLowerCase())throw new HttpError(403,'This event belongs to another organizer');
   return event;
  }
  async function eligibility(event,chain) {
@@ -27,7 +28,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  if(['/api/organizer/events','/api/admin/events'].includes(path)&&request.method==='GET') {
   const wallet=await user(request,env),page=z.coerce.number().int().min(0).parse(url.searchParams.get('page')||0);
   const allEvents=path==='/api/admin/events';
-  if(allEvents&&!admin(wallet))throw new HttpError(403,'Super admin only');
+  if(allEvents&&!await admin(wallet))throw new HttpError(403,'Super admin only');
   const {results}=await env.DB.prepare(allEvents?"SELECT e.*,(SELECT COUNT(*) FROM poap_requests r WHERE r.event_id=e.id AND r.status='pending') AS pending_requests FROM events e ORDER BY e.created_at DESC,e.id DESC LIMIT 201 OFFSET ?":'SELECT * FROM events WHERE organizer=? COLLATE NOCASE AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 201 OFFSET ?').bind(...(allEvents?[]:[wallet]),page*200).all();
   const actions=await env.DB.prepare("SELECT id,status,payload,tx_hash,error FROM chain_actions WHERE kind='publish' AND wallet=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 100").bind(wallet).all();
   return json({events:results.slice(0,200).map(row=>allEvents?{...publicEvent(row),pendingRequests:row.pending_requests}:publicEvent(row)),hasMore:results.length>200,publications:actions.results.map(row=>({...row,details:JSON.parse(row.payload)}))});
@@ -72,27 +73,27 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  const publication=path.match(/^\/api\/publications\/([a-f0-9-]{36})$/);
  if(publication&&request.method==='GET') {
   const wallet=await user(request,env),row=await env.DB.prepare('SELECT * FROM chain_actions WHERE id=?').bind(publication[1]).first();
-  if(!row||(!admin(wallet)&&row.wallet.toLowerCase()!==wallet.toLowerCase()))throw new HttpError(404,'Publication not found');
+  if(!row||(!await admin(wallet)&&row.wallet.toLowerCase()!==wallet.toLowerCase()))throw new HttpError(404,'Publication not found');
   const events=await env.DB.prepare('SELECT id,roles FROM events WHERE group_id=? ORDER BY id').bind(row.id).all();
   return json({id:row.id,status:row.status,txHash:row.tx_hash,error:row.error,events:events.results});
  }
  if(path==='/api/admin/audit'&&request.method==='GET') {
-  const wallet=await user(request,env);if(!admin(wallet))throw new HttpError(403,'Super admin only');
+  const wallet=await user(request,env);if(!await admin(wallet))throw new HttpError(403,'Super admin only');
   const page=z.coerce.number().int().min(0).parse(url.searchParams.get('page')||0);
   const {results}=await env.DB.prepare('SELECT * FROM admin_audit ORDER BY created_at DESC,id LIMIT 51 OFFSET ?').bind(page*50).all();
   return json({rows:results.slice(0,50),hasMore:results.length>50});
  }
  if(path==='/api/admin/system'&&request.method==='GET') {
-  const wallet=await user(request,env);if(!admin(wallet))throw new HttpError(403,'Super admin only');
+  const wallet=await user(request,env);if(!await admin(wallet))throw new HttpError(403,'Super admin only');
   const chain=await chainFactory(env);
   const actions=await env.DB.prepare("SELECT id,status,tx_hash,error,payload,created_at FROM chain_actions WHERE kind='pause' ORDER BY created_at DESC LIMIT 50").all();
   let signerAddress=null;try{signerAddress=new Wallet(env.ISSUER_PRIVATE_KEY).address;}catch{}
-  return json({actions:actions.results,contractAddress:env.CONTRACT_ADDRESS,superAdminAddress:env.SUPER_ADMIN_ADDRESS,signerAddress,relayer:env.ISSUER_ADDRESS,balanceETH:formatEther(await chain.provider.getBalance(env.ISSUER_ADDRESS)),superAdminOnChain:await chain.admin(wallet)});
+  return json({actions:actions.results,contractAddress:env.CONTRACT_ADDRESS,superAdminAddress:env.SUPER_ADMIN_ADDRESS,panelAdmins:await chain.panelAdmins(),signerAddress,relayer:env.ISSUER_ADDRESS,balanceETH:formatEther(await chain.provider.getBalance(env.ISSUER_ADDRESS)),superAdminOnChain:await chain.admin(wallet)});
  }
  const moderate=path.match(/^\/api\/(admin|organizer)\/events\/(\d+)$/);
  if(moderate&&post) {
   const wallet=await user(request,env),namespace=moderate[1];
-  if(namespace==='admin'&&!admin(wallet))throw new HttpError(403,'Super admin only');
+  if(namespace==='admin'&&!await admin(wallet))throw new HttpError(403,'Super admin only');
   const id=idSchema.parse(moderate[2]),listing=await owner(id,wallet);
   if(namespace==='organizer'&&listing.organizer.toLowerCase()!==wallet.toLowerCase())throw new HttpError(403,'Only the event creator can edit or delete this event');
   if(listing.deleted_at)throw new HttpError(409,'This event has been deleted');
@@ -171,7 +172,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
     const chunk=candidates.slice(offset,offset+20);
     writes.push(env.DB.prepare(`INSERT OR IGNORE INTO links(id,event_id,email,token_hash,created_at) VALUES ${chunk.map(()=>'(?,?,?,?,?)').join(',')} RETURNING id`).bind(...chunk.flatMap(row=>[row.id,row.eventId,row.email,row.hash,now()])));
    }
-   if(admin(wallet))writes.push(audit(wallet,id,'issue-links',{requested:candidates.length}));
+   if(await admin(wallet))writes.push(audit(wallet,id,'issue-links',{requested:candidates.length}));
    const saved=await env.DB.batch(writes),inserted=new Set(saved.flatMap(result=>result.results||[]).map(row=>row.id));
    const result=candidates.filter(row=>inserted.has(row.id)).map(({hash,eventId,...row})=>row);
    return json({links:result,merged:rows.length-result.length},201);
@@ -182,15 +183,15 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   const wallet=await user(request,env),link=await env.DB.prepare('SELECT * FROM links WHERE id=?').bind(linkAction[1]).first();
   if(!link)throw new HttpError(404,'Link not found');const event=await owner(link.event_id,wallet);
   if(event.deleted_at&&linkAction[2]==='regenerate')throw new HttpError(409,'This event has been deleted');
-  if(linkAction[2]==='delete-email') {await env.DB.batch([env.DB.prepare('UPDATE links SET email=NULL WHERE id=?').bind(link.id),...(admin(wallet)?[audit(wallet,link.event_id,'delete-email',{linkId:link.id})]:[])]);return json({deleted:true});}
+  if(linkAction[2]==='delete-email') {await env.DB.batch([env.DB.prepare('UPDATE links SET email=NULL WHERE id=?').bind(link.id),...((await admin(wallet))?[audit(wallet,link.event_id,'delete-email',{linkId:link.id})]:[])]);return json({deleted:true});}
   if(link.state!=='issued')throw new HttpError(409,'A claiming or minted link cannot be changed');
   const token=randomToken();
-  const result=await env.DB.batch([env.DB.prepare(linkAction[2]==='revoke'?"UPDATE links SET revoked_at=? WHERE id=? AND state='issued'":"UPDATE links SET token_hash=?,revoked_at=NULL,claim_id=NULL WHERE id=? AND state='issued'").bind(linkAction[2]==='revoke'?now():await digest(token),link.id),...(admin(wallet)?[audit(wallet,link.event_id,linkAction[2],{linkId:link.id})]:[])]);
+  const result=await env.DB.batch([env.DB.prepare(linkAction[2]==='revoke'?"UPDATE links SET revoked_at=? WHERE id=? AND state='issued'":"UPDATE links SET token_hash=?,revoked_at=NULL,claim_id=NULL WHERE id=? AND state='issued'").bind(linkAction[2]==='revoke'?now():await digest(token),link.id),...((await admin(wallet))?[audit(wallet,link.event_id,linkAction[2],{linkId:link.id})]:[])]);
   if(!result[0].meta.changes)throw new HttpError(409,'Link is already being claimed');
   return json(linkAction[2]==='regenerate'?{link:`${url.origin}/#redeem/${token}`}:{revoked:true});
  }
  const erase=path.match(/^\/api\/events\/(\d+)\/delete-emails$/);
- if(erase&&post) {const wallet=await user(request,env),id=idSchema.parse(erase[1]);await owner(id,wallet);await env.DB.batch([env.DB.prepare('UPDATE links SET email=NULL WHERE event_id=?').bind(id),...(admin(wallet)?[audit(wallet,id,'delete-emails',{})]:[])]);return json({deleted:true});}
+ if(erase&&post) {const wallet=await user(request,env),id=idSchema.parse(erase[1]);await owner(id,wallet);await env.DB.batch([env.DB.prepare('UPDATE links SET email=NULL WHERE event_id=?').bind(id),...((await admin(wallet))?[audit(wallet,id,'delete-emails',{})]:[])]);return json({deleted:true});}
  const redemption=path==='/api/redeem/claim';
  if(path==='/api/redeem'&&post) {
   const input=z.object({token:z.string().regex(/^[a-f0-9]{32}$/)}).strict().parse(await body(request));
@@ -210,7 +211,8 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   const wallet=await user(request,env),id=idSchema.parse(requests[1]);
   if(request.method==='GET') {
    const page=z.coerce.number().int().min(0).parse(url.searchParams.get('page')||0);
-   const {results}=await env.DB.prepare(`SELECT r.*,j.status AS mint_status,j.tx_hash,j.error FROM poap_requests r LEFT JOIN jobs j ON j.id=r.claim_id WHERE r.event_id=? ${admin(wallet)&&url.searchParams.get('mine')!=='1'?'':'AND r.wallet=? COLLATE NOCASE'} ORDER BY r.created_at DESC,r.id LIMIT 51 OFFSET ?`).bind(id,...(admin(wallet)&&url.searchParams.get('mine')!=='1'?[]:[wallet]),page*50).all();
+   const reviewing=await admin(wallet)&&url.searchParams.get('mine')!=='1';
+   const {results}=await env.DB.prepare(`SELECT r.*,j.status AS mint_status,j.tx_hash,j.error FROM poap_requests r LEFT JOIN jobs j ON j.id=r.claim_id WHERE r.event_id=? ${reviewing?'':'AND r.wallet=? COLLATE NOCASE'} ORDER BY r.created_at DESC,r.id LIMIT 51 OFFSET ?`).bind(id,...(reviewing?[]:[wallet]),page*50).all();
    return json({rows:results.slice(0,50),hasMore:results.length>50});
   }
   if(post) {
@@ -228,7 +230,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  const direct=path.match(/^\/api\/admin\/events\/(\d+)\/mint$/);
  let poapRequest,actor;
  if((decision||direct)&&post) {
-  actor=await user(request,env);if(!admin(actor))throw new HttpError(403,'Super admin only');
+  actor=await user(request,env);if(!await admin(actor))throw new HttpError(403,'Super admin only');
   if(decision) {
    z.object({}).strict().parse(await body(request));
    poapRequest=await env.DB.prepare('SELECT * FROM poap_requests WHERE id=? AND event_id=?').bind(decision[2],idSchema.parse(decision[1])).first();
@@ -285,14 +287,14 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   const wallet=await user(request,env),row=await env.DB.prepare('SELECT c.*,j.status,j.tx_hash,j.token_id,j.error FROM claims c JOIN jobs j ON j.id=c.id WHERE c.id=?').bind(ticket[1]).first();
   if(!row)throw new HttpError(404,'Claim not found');
   if(ticket[2]&&post) {
-   if(row.method==='ADMIN'&&!admin(wallet))throw new HttpError(403,'Super admin only');
+   if(row.method==='ADMIN'&&!await admin(wallet))throw new HttpError(403,'Super admin only');
    const event=await owner(row.event_id,wallet),onchain=await eligibility(event,await chainFactory(env));
    const updated=await env.DB.batch([
     env.DB.prepare(`UPDATE jobs SET status='pending',raw_tx=NULL,tx_hash=NULL,error=NULL,attempts=0 WHERE id=? AND status='failed'
      AND EXISTS(SELECT 1 FROM events e WHERE e.id=? AND e.listed=1 AND e.paused=0 AND ?>(SELECT COUNT(*) FROM claims c JOIN jobs j ON j.id=c.id WHERE c.event_id=e.id AND j.status IN ('pending','submitted')))
      AND (? IN ('QR','LEGACY','ADMIN') OR EXISTS(SELECT 1 FROM links WHERE claim_id=? AND state='issued' AND revoked_at IS NULL))`).bind(row.id,row.event_id,Number(onchain.cap)-Number(onchain.minted),row.method,row.id),
     env.DB.prepare("UPDATE links SET state='claiming' WHERE claim_id=? AND state='issued' AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM jobs WHERE id=? AND status='pending')").bind(row.id,row.id),
-    ...(admin(wallet)?[audit(wallet,row.event_id,'retry-mint',{claimId:row.id})]:[])
+    ...((await admin(wallet))?[audit(wallet,row.event_id,'retry-mint',{claimId:row.id})]:[])
    ]);
    if(!updated[0].meta.changes)throw new HttpError(409,'Claim cannot retry: check cap and whether its recipient link was regenerated or used');
    await wake();return json({status:'pending'},202);

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
+import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
 /// @notice Frozen role badges, sponsored publication and soulbound attendance minting.
-contract Kairo is ERC721, AccessControl {
-    address public immutable superAdmin;
+contract Kairo is ERC721, AccessControlEnumerable {
+    bytes32 public constant PANEL_ADMIN_ROLE = keccak256("PANEL_ADMIN_ROLE");
+    address public superAdmin;
+    address public pendingSuperAdmin;
     address public immutable relayer;
     uint256 public nextTokenId = 1;
     mapping(uint256 => uint256) public eventFor;
@@ -14,6 +18,8 @@ contract Kairo is ERC721, AccessControl {
     error UnauthorizedEvent();
     event EventPauseUpdated(uint256 indexed eventId, bool paused);
     event EventIssuerUpdated(uint256 indexed eventId, address indexed issuer, bool allowed);
+    event SuperAdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    event SuperAdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     struct EventData {
         string uri;
@@ -43,16 +49,40 @@ contract Kairo is ERC721, AccessControl {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
-    // The constructor is the only place that can assign the permanent admin.
-    function grantRole(bytes32 role, address account) public override {
+    function proposeSuperAdmin(address nextAdmin) external {
+        if (msg.sender != superAdmin) revert UnauthorizedEvent();
+        require(nextAdmin != address(0) && nextAdmin != superAdmin, "Invalid admin");
+        pendingSuperAdmin = nextAdmin;
+        emit SuperAdminTransferStarted(superAdmin, nextAdmin);
+    }
+
+    function acceptSuperAdmin() external {
+        if (msg.sender != pendingSuperAdmin) revert UnauthorizedEvent();
+        address previous = superAdmin;
+        pendingSuperAdmin = address(0);
+        superAdmin = msg.sender;
+        _revokeRole(DEFAULT_ADMIN_ROLE, previous);
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        emit SuperAdminTransferred(previous, msg.sender);
+    }
+
+    function setPanelAdmin(address wallet, bool allowed) external {
+        if (msg.sender != superAdmin) revert UnauthorizedEvent();
+        require(wallet != address(0) && wallet != superAdmin, "Invalid panel admin");
+        if (allowed) _grantRole(PANEL_ADMIN_ROLE, wallet);
+        else _revokeRole(PANEL_ADMIN_ROLE, wallet);
+    }
+
+    // Default admin stays single-holder; only the pending wallet can accept a transfer.
+    function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) {
         require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
         super.grantRole(role, account);
     }
-    function revokeRole(bytes32 role, address account) public override {
+    function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) {
         require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
         super.revokeRole(role, account);
     }
-    function renounceRole(bytes32 role, address account) public override {
+    function renounceRole(bytes32 role, address account) public override(AccessControl, IAccessControl) {
         require(role != DEFAULT_ADMIN_ROLE, "Fixed admin");
         super.renounceRole(role, account);
     }
@@ -164,7 +194,7 @@ contract Kairo is ERC721, AccessControl {
         return super._update(to, tokenId, auth);
     }
 
-    function supportsInterface(bytes4 id) public view override(ERC721, AccessControl) returns (bool) {
+    function supportsInterface(bytes4 id) public view override(ERC721, AccessControlEnumerable) returns (bool) {
         return id == 0xb45a3c0e || super.supportsInterface(id);
     }
 }

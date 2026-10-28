@@ -119,7 +119,10 @@ export function createHandler(chainFactory = connectChain) {
       }
       if (path === '/api/auth/me') {
         const wallet = await user(request, env);
-        return json({ wallet, admin: Boolean(env.SUPER_ADMIN_ADDRESS && wallet.toLowerCase() === env.SUPER_ADMIN_ADDRESS.toLowerCase()) });
+        const superAdmin=Boolean(env.SUPER_ADMIN_ADDRESS && wallet.toLowerCase() === env.SUPER_ADMIN_ADDRESS.toLowerCase());
+        let admin=false;
+        try {const chain=await chainFactory(env);await chain.assertContract();admin=await chain.admin(wallet);} catch { /* A network failure must not grant panel access. */ }
+        return json({wallet,admin,superAdmin:admin&&superAdmin});
       }
       if (path === '/api/auth/logout' && request.method === 'POST') {
         const cookie = request.headers.get('cookie')?.match(/kairo_session=([a-f0-9]{64})/)?.[1];

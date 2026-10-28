@@ -4,6 +4,10 @@ import { ServiceError } from './errors.js';
 
 export const ABI = [
   'function superAdmin() view returns (address)',
+  'function PANEL_ADMIN_ROLE() view returns (bytes32)',
+  'function getRoleMemberCount(bytes32) view returns (uint256)',
+  'function getRoleMember(bytes32,uint256) view returns (address)',
+  'function setPanelAdmin(address,bool)',
   'function relayer() view returns (address)',
   'function createEvents((string uri,uint64 cap)[] roles,uint64 startsAt,uint64 endsAt,address organizer)',
   'function mintAttendanceBatch(uint256[] ids,address[] wallets)',
@@ -55,7 +59,7 @@ export async function connectChain(env) {
         if(error.code==='CALL_EXCEPTION')throw new ServiceError('CONTRACT_MISMATCH','Deploy the updated Kairo contract to enable publishing and minting.','contract');
         throw error;
       }
-      if(admin.toLowerCase()!==env.SUPER_ADMIN_ADDRESS.toLowerCase()||issuer.toLowerCase()!==env.ISSUER_ADDRESS.toLowerCase())throw new ServiceError('CONTRACT_MISMATCH','The contract admin or relayer differs from your configuration.','contract');
+      if(admin.toLowerCase()!==env.SUPER_ADMIN_ADDRESS.toLowerCase()||issuer.toLowerCase()!==env.ISSUER_ADDRESS.toLowerCase())throw new ServiceError('CONTRACT_MISMATCH','The contract admin or relayer differs from your Worker environment. Update the configured address.','contract');
     },
     async assertReady() {
       await this.assertContract();
@@ -75,7 +79,7 @@ export async function connectChain(env) {
     async signAction(action) {
       const signer = new Wallet(env.ISSUER_PRIVATE_KEY,provider), payload=JSON.parse(action.payload);
       if ((await contract.relayer()).toLowerCase() !== signer.address.toLowerCase() ||
-          (await contract.superAdmin()).toLowerCase() !== env.SUPER_ADMIN_ADDRESS.toLowerCase()) throw Error('Contract authority mismatch; deploy the updated contract');
+          (await contract.superAdmin()).toLowerCase() !== env.SUPER_ADMIN_ADDRESS.toLowerCase()) throw Error('Contract authority mismatch; update the Worker admin or relayer address');
       return sign(action.kind==='publish'
         ? await contract.connect(signer).createEvents.populateTransaction(payload.roleArtwork.map(art=>[art.uri,art.cap]),payload.mintStartsAt,payload.mintEndsAt,payload.organizer)
         : await contract.connect(signer).setEventsPaused.populateTransaction(payload.ids,payload.paused));
@@ -93,7 +97,11 @@ export async function connectChain(env) {
     },
     async event(id) { return (await forEvent(id)).events(id); },
     async batchCompatible(id) { return Boolean((await contract.events(id)).cap); },
-    async admin(wallet) { return contract.hasRole(await contract.DEFAULT_ADMIN_ROLE(), wallet); },
+    async admin(wallet) { return wallet.toLowerCase()===(await contract.superAdmin()).toLowerCase() || contract.hasRole(await contract.PANEL_ADMIN_ROLE(), wallet); },
+    async panelAdmins() {
+      const role=await contract.PANEL_ADMIN_ROLE(),count=Number(await contract.getRoleMemberCount(role));
+      return Promise.all(Array.from({length:count},(_,i)=>contract.getRoleMember(role,i)));
+    },
     async token(id, wallet) { return (await (await forEvent(id)).tokenFor(id, wallet)).toString(); },
     async signMint(id, wallet) {
       const signer = new Wallet(env.ISSUER_PRIVATE_KEY, provider), instance=await forEvent(id);

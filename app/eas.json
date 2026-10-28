@@ -28,7 +28,7 @@
     },
     "base": {
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://kairo-site-7fb.pages.dev"
+        "EXPO_PUBLIC_API_URL": "https://kairo.aakritigupta7227.workers.dev"
       }
     }
   }

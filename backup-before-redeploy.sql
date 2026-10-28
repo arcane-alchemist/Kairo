@@ -11,41 +11,46 @@ INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(4,'0004_qr_claims.
 INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(5,'0005_linked_qr_claims.sql','2026-10-11 05:10:13');
 INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(6,'0006_student_experience.sql','2026-10-26 05:05:58');
 INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(7,'0007_organizer_studio.sql','2026-10-26 05:51:48');
+INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(8,'0008_role_drops.sql','2026-10-28 03:37:55');
+INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(9,'0009_direct_publication.sql','2026-10-28 03:37:55');
+INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(10,'0010_session_and_query_indexes.sql','2026-10-28 03:37:55');
 CREATE TABLE events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
   club TEXT NOT NULL, category TEXT NOT NULL, venue TEXT NOT NULL,
   image TEXT NOT NULL, uri TEXT NOT NULL, starts_at INTEGER NOT NULL,
-  ends_at INTEGER NOT NULL, rsvp_deadline INTEGER NOT NULL, cap INTEGER NOT NULL,
+  ends_at INTEGER NOT NULL, cap INTEGER NOT NULL,
   organizer TEXT NOT NULL, created_at INTEGER NOT NULL
-, event_starts_at INTEGER, event_ends_at INTEGER, claim_mode TEXT NOT NULL DEFAULT 'attendance' CHECK(claim_mode IN ('attendance','qr')), campus TEXT NOT NULL DEFAULT '', eligibility TEXT NOT NULL DEFAULT 'Open to campus participants with a college ID', roles TEXT NOT NULL DEFAULT '["Attendee"]', animation_url TEXT);
-INSERT INTO "events" ("id","title","description","club","category","venue","image","uri","starts_at","ends_at","rsvp_deadline","cap","organizer","created_at","event_starts_at","event_ends_at","claim_mode","campus","eligibility","roles","animation_url") VALUES(1,'Kairo live distribution test','Synthetic integration test only. This collectible does not certify physical attendance.','Kairo test','Technology','Synthetic test — no physical event','https://kairo.aakritigupta7227.workers.dev/media/art/9a30e678948ebf3260258e566d9263b54f7cc7c1b30922d6cc80850711071a03.png','https://kairo.aakritigupta7227.workers.dev/media/metadata/53d4e8b03145afe111fce96f0ec43490cc31476304640b018165d5899bd3369a.json',1791682872,1791769272,1791769272,1,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE',1791682899,1791682872,1791769272,'attendance','','Open to campus participants with a college ID','["Attendee"]',NULL);
-INSERT INTO "events" ("id","title","description","club","category","venue","image","uri","starts_at","ends_at","rsvp_deadline","cap","organizer","created_at","event_starts_at","event_ends_at","claim_mode","campus","eligibility","roles","animation_url") VALUES(2,'Hacktober',replace('Celebrate the spirit of open source with Hacktoberfest 2026 at SRM AP!\nThis POAP commemorates a celebration of collaboration, creativity, and community-driven innovation. Representing the joy of building together, sharing knowledge, and contributing to Free and Open Source Software (FOSS), it honors everyone who takes a step toward making open source more accessible and impactful.','\n',char(10)),'FOSS · SRM AP','Technology','SRM University AP','https://kairo.aakritigupta7227.workers.dev/media/art/a6c863301c5c6f7866a15056d32e09aa730882504b4c4dc1d857add9fb90c1ea.png','https://kairo.aakritigupta7227.workers.dev/media/metadata/df66406dca9d7794fc3814092420fa5d8fb806c2548eb97d8a5e677482bb1ec9.json',1791691200,1791703800,1791639000,50,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE',1791691850,1791642600,1791700200,'qr','','Open to campus participants with a college ID','["Attendee"]',NULL);
-CREATE TABLE registrations (
-  id TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id),
-  student_hash TEXT NOT NULL, wallet TEXT NOT NULL, consent_at INTEGER NOT NULL,
-  checked_in_at INTEGER, checked_in_by TEXT, claimed_at INTEGER, participation_role TEXT NOT NULL DEFAULT 'Attendee',
-  UNIQUE(event_id, student_hash), UNIQUE(event_id, wallet)
+, event_starts_at INTEGER, event_ends_at INTEGER, campus TEXT NOT NULL DEFAULT '', roles TEXT NOT NULL DEFAULT '["Attendee"]', animation_url TEXT, group_id TEXT, listed INTEGER NOT NULL DEFAULT 1, verified INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0, rejection_reason TEXT, approximate_attendees INTEGER NOT NULL DEFAULT 0);
+INSERT INTO "events" ("id","title","description","club","category","venue","image","uri","starts_at","ends_at","cap","organizer","created_at","event_starts_at","event_ends_at","campus","roles","animation_url","group_id","listed","verified","paused","rejection_reason","approximate_attendees") VALUES(1,'Kairo live distribution test','Synthetic integration test only. This collectible does not certify physical attendance.','Kairo test','Technology','Synthetic test — no physical event','https://kairo.aakritigupta7227.workers.dev/media/art/9a30e678948ebf3260258e566d9263b54f7cc7c1b30922d6cc80850711071a03.png','https://kairo.aakritigupta7227.workers.dev/media/metadata/53d4e8b03145afe111fce96f0ec43490cc31476304640b018165d5899bd3369a.json',1791682872,1791769272,1,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE',1791682899,1791682872,1791769272,'','["Attendee"]',NULL,NULL,1,0,0,NULL,0);
+INSERT INTO "events" ("id","title","description","club","category","venue","image","uri","starts_at","ends_at","cap","organizer","created_at","event_starts_at","event_ends_at","campus","roles","animation_url","group_id","listed","verified","paused","rejection_reason","approximate_attendees") VALUES(2,'Hacktober',replace('Celebrate the spirit of open source with Hacktoberfest 2026 at SRM AP!\nThis POAP commemorates a celebration of collaboration, creativity, and community-driven innovation. Representing the joy of building together, sharing knowledge, and contributing to Free and Open Source Software (FOSS), it honors everyone who takes a step toward making open source more accessible and impactful.','\n',char(10)),'FOSS · SRM AP','Technology','SRM University AP','https://kairo.aakritigupta7227.workers.dev/media/art/a6c863301c5c6f7866a15056d32e09aa730882504b4c4dc1d857add9fb90c1ea.png','https://kairo.aakritigupta7227.workers.dev/media/metadata/df66406dca9d7794fc3814092420fa5d8fb806c2548eb97d8a5e677482bb1ec9.json',1791691200,1791703800,50,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE',1791691850,1791642600,1791700200,'','["Attendee"]',NULL,NULL,1,0,0,NULL,0);
+CREATE TABLE challenges (id TEXT PRIMARY KEY, message TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE sessions (hash TEXT PRIMARY KEY, wallet TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE claims (
+ id TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id),
+ wallet TEXT NOT NULL COLLATE NOCASE, method TEXT NOT NULL CHECK(method IN ('QR','LINK','LEGACY')),
+ created_at INTEGER NOT NULL, attempt_id TEXT, UNIQUE(event_id,wallet)
 );
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('ccbbc700-ddb1-4665-a76e-d7d4e75c8027',1,'fcc0581cc817f86102ca54afc9be45c0129b0c4c91dc67383cb748e5976b22a4','0x35539F1dA35751066689d144E6225804D9729329',1791682900,1791682901,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE',NULL,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('778248fd-3d41-48d5-b144-2144cdd87be6',2,'5da215ddf00786a6cebac0c94634ee49824aa0ce1ac551e96a2dd745d83223e8','0xcAb552819805Acb81C8747402264B86ca5f0841a',1791692740,NULL,NULL,1791692740,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('39416476-5ade-4cb7-a0bb-863388ef669f',2,'2f2b6bd889b6a6b81d9e75c36d9d777dcc264e30a7cf0ff243e8482662d225e1','0x9405ba7088fF01AE90510D9e663Dd78626400aE0',1791693730,NULL,NULL,1791693730,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('ee3a78f0-cddd-426b-898d-62a96e0da4f7',2,'bf3c0e7ba84e846952ae868bd80d1358946c6809979bc431f0601c4215dd2ae0','0x4CB1E99035D2812472B2d50DBB590E9C593188bE',1791695134,NULL,NULL,1791695134,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('14322bbf-c370-4df4-95f5-762cc045fc7e',2,'580579fe9cb33570a4d3f95e9e9bef3b63ca28e31b09cf2b04d6a587a2e7e23d','0x34c65550A4D01c76464A33A762e1379605e20ba6',1791695911,NULL,NULL,1791695911,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('170906d6-e608-4349-b45d-e5be1c7b21c1',2,'40d3f6b7b8b38170fbb6ce9435d22090d010564191178884c9f5701539f74575','0xCCe110Bf7Dd73806AC1e21B2AE28deB3Aa272f6A',1791696004,NULL,NULL,1791696004,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('1a9ad9cd-b8de-4c0f-beca-7066b5efe62e',2,'a49891f45d0557b918eaa03d999cac7983e4709b9a7aff553a5ce6403cef6e0f','0x3acFACF496986CE6852f8D278fb9c0C44f5A725b',1791696200,NULL,NULL,1791696200,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('e4f7db4e-ec6f-4268-8742-e602fd5f8241',2,'466a612e979aae764cf49c7e810d6754626d430e6dce8bdc8d6f8025f72458e8','0x883fC06380861d4000cffb8EB6328747BE39B2fC',1791696595,NULL,NULL,1791696595,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('058b6a90-b626-4ce4-b990-3e73daae9ae6',2,'829ab9b796279f17249bf3aede6e6ef358de0bd5fb8e1aa5cc9d1845dd470e55','0xbF9a1dC9d78Fc1369B472413d23215BeDc82Ba23',1791696669,NULL,NULL,1791696669,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('1cb61030-0ff3-4fc9-95af-1e750a38a8a6',2,'f9370295a69e8673f13ea276486ccc2da1c856b10b214afd197d7a02f7fbc3ab','0x23423Bc2d9DfcA9BfE410106F98a67Ec5d96716C',1791697385,NULL,NULL,1791697385,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('5144448b-e275-421b-8904-c1b5abe380af',2,'f75258a967f8e900279933a10be17d19902d5a58ae4e66885099aada3597cd0a','0x45BB71A8B5303615aCb201c8dab720ceaBDccFe1',1791697806,NULL,NULL,1791697806,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('17df5034-c26f-4af4-9cb8-b4f5745c2153',2,'e88575a6e5b421672642af21e5ee4fa0d20428b273e0e419a639dcc41df20a7b','0x97384ea78C59985220B9dDf9C20bbb16D546B4E5',1791697878,NULL,NULL,1791697878,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('b34e7e90-438d-4bd3-b30d-d96b3dc70482',2,'0a3f662c4a1a6b92de65958fb011259f52a842de0f4ffda45efb3f879a9be73c','0xDa5c1522f32AEbf8CB20d1b25De8A437953161d7',1791698673,NULL,NULL,1791698673,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('90683022-5a68-4eb0-aef2-e6ef26353472',2,'c944547a7d412c3c3c8bb7f29b6f0eea4e84a23b67fcd241262b6ff742ddbeb8','0x5a2148515C50CAcA543704393F2cdc8689B4Cd27',1791699683,NULL,NULL,1791699683,'Attendee');
-INSERT INTO "registrations" ("id","event_id","student_hash","wallet","consent_at","checked_in_at","checked_in_by","claimed_at","participation_role") VALUES('d7eb0f6c-166b-4b2f-b268-2f4fe42134fd',2,'48dbbf33c83b83b5e77ae4210f7ec5d937df9c763f8645e88c3c0e6a4dc9627e','0xF6F6fB0B2e3f5FA36c24AC7EFb7F152D9358597A',1791699824,NULL,NULL,1791699824,'Attendee');
-CREATE TABLE jobs (
-  id TEXT PRIMARY KEY REFERENCES registrations(id), status TEXT NOT NULL DEFAULT 'pending',
-  raw_tx TEXT, tx_hash TEXT, token_id TEXT, attempts INTEGER NOT NULL DEFAULT 0,
-  error TEXT, created_at INTEGER NOT NULL
-, updated_at INTEGER);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('ccbbc700-ddb1-4665-a76e-d7d4e75c8027',1,'0x35539F1dA35751066689d144E6225804D9729329','LEGACY',1791682900,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('778248fd-3d41-48d5-b144-2144cdd87be6',2,'0xcAb552819805Acb81C8747402264B86ca5f0841a','QR',1791692740,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('39416476-5ade-4cb7-a0bb-863388ef669f',2,'0x9405ba7088fF01AE90510D9e663Dd78626400aE0','QR',1791693730,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('ee3a78f0-cddd-426b-898d-62a96e0da4f7',2,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE','QR',1791695134,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('14322bbf-c370-4df4-95f5-762cc045fc7e',2,'0x34c65550A4D01c76464A33A762e1379605e20ba6','QR',1791695911,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('170906d6-e608-4349-b45d-e5be1c7b21c1',2,'0xCCe110Bf7Dd73806AC1e21B2AE28deB3Aa272f6A','QR',1791696004,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('1a9ad9cd-b8de-4c0f-beca-7066b5efe62e',2,'0x3acFACF496986CE6852f8D278fb9c0C44f5A725b','QR',1791696200,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('e4f7db4e-ec6f-4268-8742-e602fd5f8241',2,'0x883fC06380861d4000cffb8EB6328747BE39B2fC','QR',1791696595,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('058b6a90-b626-4ce4-b990-3e73daae9ae6',2,'0xbF9a1dC9d78Fc1369B472413d23215BeDc82Ba23','QR',1791696669,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('1cb61030-0ff3-4fc9-95af-1e750a38a8a6',2,'0x23423Bc2d9DfcA9BfE410106F98a67Ec5d96716C','QR',1791697385,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('5144448b-e275-421b-8904-c1b5abe380af',2,'0x45BB71A8B5303615aCb201c8dab720ceaBDccFe1','QR',1791697806,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('17df5034-c26f-4af4-9cb8-b4f5745c2153',2,'0x97384ea78C59985220B9dDf9C20bbb16D546B4E5','QR',1791697878,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('b34e7e90-438d-4bd3-b30d-d96b3dc70482',2,'0xDa5c1522f32AEbf8CB20d1b25De8A437953161d7','QR',1791698673,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('90683022-5a68-4eb0-aef2-e6ef26353472',2,'0x5a2148515C50CAcA543704393F2cdc8689B4Cd27','QR',1791699683,NULL);
+INSERT INTO "claims" ("id","event_id","wallet","method","created_at","attempt_id") VALUES('d7eb0f6c-166b-4b2f-b268-2f4fe42134fd',2,'0xF6F6fB0B2e3f5FA36c24AC7EFb7F152D9358597A','QR',1791699824,NULL);
+CREATE TABLE IF NOT EXISTS "jobs" (
+ id TEXT PRIMARY KEY REFERENCES claims(id), status TEXT NOT NULL DEFAULT 'pending',
+ raw_tx TEXT, tx_hash TEXT, token_id TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+ error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER
+);
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('ccbbc700-ddb1-4665-a76e-d7d4e75c8027','confirmed','0x02f8b183aa36a780830186ad830186cd8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b6000000000000000000000000000000000000000000000000000000000000000100000000000000000000000035539f1da35751066689d144e6225804d9729329c080a0cfc58e8f81dc23e4189ddd25a9dc23befcf7ef5fba1cc137abde8c619c366a1ca046b18bf309fa2726b2e00083b96a8fc28ecf7221181bc03feefb78e9ff853952','0xf7e9aaad7ff83c11a1b5f8df4d36acbd14e1099426652b94e4d9dc9502743d7f','1',0,NULL,1791682901,1791682903);
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('778248fd-3d41-48d5-b144-2144cdd87be6','confirmed','0x02f8b183aa36a701830f4240830f425e8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000cab552819805acb81c8747402264b86ca5f0841ac080a09ade402d673de392af44465e8083e5d3e5c1b3e3445627b0ec16f08909d99748a05239ef120d31a6f1c74f5d43a0f1023e755ef21b1bf28870a63cf62e33db7e63','0xbf06b94501fc18f8a5651ddce5dc11b9964a11a1db60f16803fdf9a04d9baf4b','2',0,NULL,1791692740,1791692743);
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('39416476-5ade-4cb7-a0bb-863388ef669f','confirmed','0x02f8b183aa36a702830f4240830f425e8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b600000000000000000000000000000000000000000000000000000000000000020000000000000000000000009405ba7088ff01ae90510d9e663dd78626400ae0c001a07d4cf1c8a5bc2df1bcdd8fbb4e4f5319de97cd3b14cd39eae907ec19ffd23698a034028d76ded3c522bcb22e031564dcc2af4d9a60d41930840165ec6a471c0144','0xec453ed8f802e87a15451f97c0e71055491fbd79eba2fe936c0cb38074b360c9','3',0,NULL,1791693730,1791693733);
@@ -61,13 +66,7 @@ INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","erro
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('b34e7e90-438d-4bd3-b30d-d96b3dc70482','confirmed','0x02f8b183aa36a70c830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000da5c1522f32aebf8cb20d1b25de8a437953161d7c001a05bd558aeb1721a7bec44528d94bdc3b9027e5b51348b855026428534e1f37c34a0017967106af73024afbddc7d350797dbe490197ee9e0cf8ac1a1947312a4a537','0xf0b51035ce3650dcb55d3e956907192a2026ce23a57cd092717fc5846dd4f0b0','13',0,NULL,1791698673,1791698675);
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('90683022-5a68-4eb0-aef2-e6ef26353472','confirmed','0x02f8b183aa36a70d830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b600000000000000000000000000000000000000000000000000000000000000020000000000000000000000005a2148515c50caca543704393f2cdc8689b4cd27c080a0ad43e669239e8f8a151de7889f02aa3e574f7ec7237f6cd2566bc22c62bdb78fa078676a58f023c273aab4f19b28563dfc48076a4d44e427c4aac3a0f62330322c','0xe2facac663f241a7c60fc3a1c7a645f4b8c3745492c2debe2808f62826f48549','14',0,NULL,1791699683,1791699686);
 INSERT INTO "jobs" ("id","status","raw_tx","tx_hash","token_id","attempts","error","created_at","updated_at") VALUES('d7eb0f6c-166b-4b2f-b268-2f4fe42134fd','confirmed','0x02f8b183aa36a70e830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000f6f6fb0b2e3f5fa36c24ac7efb7f152d9358597ac080a044e7c77abc7a4ba11c55a038c4e5e5df531a903093e5321f30443a8629538e37a01f96c871d10245b161f7b6fa6a537ad2ae0f2f8e60c5d51d257a611ddcecc992','0x6939f92c797a490c90ca6ab2adce125f59c7ced4f7bc99eb866bf9751b3c6032','15',0,NULL,1791699824,1791699827);
-CREATE TABLE challenges (id TEXT PRIMARY KEY, message TEXT NOT NULL, expires_at INTEGER NOT NULL);
-CREATE TABLE sessions (hash TEXT PRIMARY KEY, wallet TEXT NOT NULL, expires_at INTEGER NOT NULL);
-CREATE TABLE rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-CREATE TABLE mint_transactions (
-  hash TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
-  raw_tx TEXT NOT NULL, created_at INTEGER NOT NULL
-);
+CREATE TABLE IF NOT EXISTS "mint_transactions" (hash TEXT NOT NULL,job_id TEXT NOT NULL REFERENCES "jobs"(id),raw_tx TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(hash,job_id));
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0xf7e9aaad7ff83c11a1b5f8df4d36acbd14e1099426652b94e4d9dc9502743d7f','ccbbc700-ddb1-4665-a76e-d7d4e75c8027','0x02f8b183aa36a780830186ad830186cd8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b6000000000000000000000000000000000000000000000000000000000000000100000000000000000000000035539f1da35751066689d144e6225804d9729329c080a0cfc58e8f81dc23e4189ddd25a9dc23befcf7ef5fba1cc137abde8c619c366a1ca046b18bf309fa2726b2e00083b96a8fc28ecf7221181bc03feefb78e9ff853952',1791682903);
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0xbf06b94501fc18f8a5651ddce5dc11b9964a11a1db60f16803fdf9a04d9baf4b','778248fd-3d41-48d5-b144-2144cdd87be6','0x02f8b183aa36a701830f4240830f425e8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000cab552819805acb81c8747402264b86ca5f0841ac080a09ade402d673de392af44465e8083e5d3e5c1b3e3445627b0ec16f08909d99748a05239ef120d31a6f1c74f5d43a0f1023e755ef21b1bf28870a63cf62e33db7e63',1791692743);
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0xec453ed8f802e87a15451f97c0e71055491fbd79eba2fe936c0cb38074b360c9','39416476-5ade-4cb7-a0bb-863388ef669f','0x02f8b183aa36a702830f4240830f425e8307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b600000000000000000000000000000000000000000000000000000000000000020000000000000000000000009405ba7088ff01ae90510d9e663dd78626400ae0c001a07d4cf1c8a5bc2df1bcdd8fbb4e4f5319de97cd3b14cd39eae907ec19ffd23698a034028d76ded3c522bcb22e031564dcc2af4d9a60d41930840165ec6a471c0144',1791693733);
@@ -83,33 +82,27 @@ INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0xf0b51035ce3650dcb55d3e956907192a2026ce23a57cd092717fc5846dd4f0b0','b34e7e90-438d-4bd3-b30d-d96b3dc70482','0x02f8b183aa36a70c830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000da5c1522f32aebf8cb20d1b25de8a437953161d7c001a05bd558aeb1721a7bec44528d94bdc3b9027e5b51348b855026428534e1f37c34a0017967106af73024afbddc7d350797dbe490197ee9e0cf8ac1a1947312a4a537',1791698675);
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0xe2facac663f241a7c60fc3a1c7a645f4b8c3745492c2debe2808f62826f48549','90683022-5a68-4eb0-aef2-e6ef26353472','0x02f8b183aa36a70d830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b600000000000000000000000000000000000000000000000000000000000000020000000000000000000000005a2148515c50caca543704393f2cdc8689b4cd27c080a0ad43e669239e8f8a151de7889f02aa3e574f7ec7237f6cd2566bc22c62bdb78fa078676a58f023c273aab4f19b28563dfc48076a4d44e427c4aac3a0f62330322c',1791699686);
 INSERT INTO "mint_transactions" ("hash","job_id","raw_tx","created_at") VALUES('0x6939f92c797a490c90ca6ab2adce125f59c7ced4f7bc99eb866bf9751b3c6032','d7eb0f6c-166b-4b2f-b268-2f4fe42134fd','0x02f8b183aa36a70e830f4240830f42608307a67d94999524cb77db83864da6fac4261438792193392280b8445ba822b60000000000000000000000000000000000000000000000000000000000000002000000000000000000000000f6f6fb0b2e3f5fa36c24ac7efb7f152d9358597ac080a044e7c77abc7a4ba11c55a038c4e5e5df531a903093e5321f30443a8629538e37a01f96c871d10245b161f7b6fa6a537ad2ae0f2f8e60c5d51d257a611ddcecc992',1791699827);
-CREATE TABLE organizer_drafts (
-  id TEXT PRIMARY KEY,
-  wallet TEXT NOT NULL,
-  details TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('draft','submitted','published')) DEFAULT 'draft',
-  event_id INTEGER REFERENCES events(id),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+CREATE TABLE links (
+ id TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), email TEXT,
+ token_hash TEXT UNIQUE NOT NULL, state TEXT NOT NULL DEFAULT 'issued' CHECK(state IN ('issued','claiming','minted')),
+ revoked_at INTEGER, claim_id TEXT REFERENCES claims(id), created_at INTEGER NOT NULL,
+ UNIQUE(event_id,email)
 );
+CREATE TABLE chain_actions (
+ id TEXT PRIMARY KEY, wallet TEXT NOT NULL COLLATE NOCASE, kind TEXT NOT NULL CHECK(kind IN ('publish','pause')),
+ payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', raw_tx TEXT, tx_hash TEXT,
+ error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE admin_audit (id TEXT PRIMARY KEY,wallet TEXT NOT NULL,event_id INTEGER,action TEXT NOT NULL,details TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE action_transactions (hash TEXT PRIMARY KEY,action_id TEXT NOT NULL REFERENCES chain_actions(id),raw_tx TEXT NOT NULL,created_at INTEGER NOT NULL);
 DELETE FROM sqlite_sequence;
-INSERT INTO "sqlite_sequence" ("name","seq") VALUES('d1_migrations',7);
-CREATE INDEX jobs_status ON jobs(status, created_at);
-CREATE INDEX registrations_event ON registrations(event_id);
-CREATE INDEX registrations_wallet ON registrations(wallet);
-CREATE INDEX organizer_drafts_wallet ON organizer_drafts(wallet,updated_at);
-CREATE INDEX organizer_drafts_status ON organizer_drafts(status,updated_at);
-CREATE TRIGGER one_wallet_per_qr_collectible
-BEFORE INSERT ON registrations
-WHEN EXISTS (
-  SELECT 1 FROM registrations r
-  JOIN events previous ON previous.id=r.event_id
-  JOIN events current ON current.id=NEW.event_id
-  WHERE r.wallet=NEW.wallet COLLATE NOCASE
-    AND r.event_id<>NEW.event_id
-    AND previous.uri=current.uri
-    AND previous.claim_mode='qr' AND current.claim_mode='qr'
-)
-BEGIN
-  SELECT RAISE(ABORT, 'Collectible already claimed by this wallet');
-END;
+INSERT INTO "sqlite_sequence" ("name","seq") VALUES('d1_migrations',10);
+CREATE UNIQUE INDEX events_group_role ON events(group_id, roles) WHERE group_id IS NOT NULL;
+CREATE INDEX jobs_status ON jobs(status,created_at);
+CREATE INDEX claims_wallet ON claims(wallet);
+CREATE INDEX links_claim ON links(claim_id);
+CREATE INDEX actions_status ON chain_actions(status,created_at);
+CREATE INDEX actions_wallet ON chain_actions(wallet,kind,created_at);
+CREATE INDEX events_organizer ON events(organizer COLLATE NOCASE,created_at);
+CREATE INDEX links_retention ON links(created_at) WHERE email IS NOT NULL;
+CREATE INDEX audit_time ON admin_audit(created_at,id);

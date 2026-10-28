@@ -2,7 +2,7 @@ import { createApiClient } from './api.js';
 import { csv } from '../serverless/claims.js';
 import { eventState, matchesEvent, profileStats, filterCollection, groupCollection } from './student-model.js';
 import { claimEntry } from './claim-route.js';
-import { BrowserProvider, getAddress, hexlify, toUtf8Bytes } from 'ethers';
+import { BrowserProvider, Contract, getAddress, hexlify, toUtf8Bytes } from 'ethers';
 import QRCode from 'qrcode';
 import { badgeSvg } from './art.js';
 import { mountCoin } from './scene.js';
@@ -222,7 +222,7 @@ document.querySelector('#wallet').onclick = () => busy(document.querySelector('#
     await connect(); await render();
     return;
   }
-  show(`<h2>${session.admin?'Your superadmin profile':'Your wallet'}</h2><code class="wallet-address">${esc(session.wallet)}</code><p>${session.admin?'You are signed in as superadmin. Review POAP requests and manage all events from your dashboard.':'One MetaMask account is used per Kairo session. When switching, select only the account you want to use.'}</p>${session.admin?'<a class="button button-dark" href="#admin">Events & requests ↗</a>':''}<a class="button button-light" href="#gallery">My gallery</a><div class="form-actions"><button id="wallet-change" class="button">Switch account</button><button id="wallet-copy" class="button button-light">Copy address</button><button id="wallet-disconnect" class="button button-light">Disconnect</button></div>`);
+  show(`<h2>${session.superAdmin?'Your superadmin profile':session.admin?'Your admin profile':'Your wallet'}</h2><code class="wallet-address">${esc(session.wallet)}</code><p>${session.admin?'You are signed in to the admin panel. Review POAP requests and manage events from your dashboard.':'One MetaMask account is used per Kairo session. When switching, select only the account you want to use.'}</p>${session.admin?'<a class="button button-dark" href="#admin">Events & requests ↗</a>':''}<a class="button button-light" href="#gallery">My gallery</a><div class="form-actions"><button id="wallet-change" class="button">Switch account</button><button id="wallet-copy" class="button button-light">Copy address</button><button id="wallet-disconnect" class="button button-light">Disconnect</button></div>`);
   modalBody.querySelector('#wallet-copy').onclick = event => busy(event.target, async () => { if (!navigator.clipboard?.writeText) throw Error('Copy is unavailable here. Select the address above to copy it.'); await navigator.clipboard.writeText(session.wallet); toast('Wallet address copied'); });
   modalBody.querySelector('#wallet-change').onclick = event => busy(event.target, async () => {
     session=null;connectedWallet='';activeChain='';walletRevision++;collectionRequest++;walletHeader();close();
@@ -535,16 +535,35 @@ async function adminActivity(version) {
  let audit=results[2].status==='fulfilled'?results[2].value:null,auditPage=0;
  const workspace=results[3].status==='fulfilled'?results[3].value:{events:[]};
  const node=main.querySelector('#studio-system');
- const draw=()=>renderSystemPanel(node,{system,health,audit,workspace,auditPage},async page=>{
+ const draw=()=>{renderSystemPanel(node,{system,health,audit,workspace,auditPage},async page=>{
   try {const rows=await api(`/admin/audit?page=${page}`,{quiet:true});if(version!==renderId)return;auditPage=page;audit=rows;draw();}catch(error){toast(error.message);}
- });draw();
+ });
+ if(session?.superAdmin&&system?.panelAdmins){
+  node.insertAdjacentHTML('beforeend',`<section class="system-panel"><h2>Panel access</h2><p>Grant or revoke admin panel access with your superadmin wallet. Delegates can review requests and manage events; they cannot grant access to others or transfer the superadmin role. This action requires a Sepolia transaction from your wallet.</p><form id="panel-admin-form"><label class="field">Wallet address<input name="wallet" required placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button">Grant panel access</button></form><div class="table-wrap"><table><thead><tr><th>Admin wallet</th><th>Action</th></tr></thead><tbody>${system.panelAdmins.map(wallet=>`<tr><td>${esc(wallet)}</td><td><button class="button button-light button-small" data-revoke-panel="${esc(wallet)}">Revoke</button></td></tr>`).join('')||'<tr><td colspan="2">No delegated admins yet.</td></tr>'}</tbody></table></div></section>`);
+  const change=async(wallet,allowed)=>{
+   wallet=getAddress(wallet.trim());
+   if(wallet.toLowerCase()===session.wallet.toLowerCase())throw Error('The superadmin already has panel access.');
+   const provider=walletClient.provider,accounts=await provider.request({method:'eth_accounts'});
+   if(accounts.length!==1||accounts[0].toLowerCase()!==session.wallet.toLowerCase())throw Error('Select only the signed-in superadmin wallet in MetaMask.');
+   await switchNetwork();
+   const signer=await new BrowserProvider(provider).getSigner(session.wallet);
+   const tx=await new Contract(config.contractAddress,['function setPanelAdmin(address,bool)'],signer).setPanelAdmin(wallet,allowed);
+   await tx.wait(1);
+   toast(allowed?'Panel access granted.':'Panel access revoked.');
+   if(version===renderId)await adminActivity(version);
+  };
+  const form=node.querySelector('#panel-admin-form');
+  form.onsubmit=event=>{event.preventDefault();busy(form.querySelector('button'),()=>change(form.elements.wallet.value,true));};
+  node.querySelectorAll('[data-revoke-panel]').forEach(button=>button.onclick=()=>busy(button,()=>change(button.dataset.revokePanel,false)));
+ }
+ };draw();
 }
 
 function adminLogin() {
- main.innerHTML=`<header class="studio-heading"><div><h1>Super admin sign-in.</h1><p>Event moderation, system health and the audit log.</p></div></header><section class="studio-empty"><h2>Connect the admin wallet</h2><p>Only the configured super admin can access this panel.</p><code class="wallet-address">${esc(config.superAdminAddress||'')}</code><p>Use MetaMask and sign the login message. No private key or password is needed.</p>${session&&!session.admin?'<p class="inline-warning">Your current wallet is not the super admin. Select the admin account in MetaMask before signing in.</p>':''}<button id="admin-sign-in" class="button button-dark">${session?.admin?'Open admin panel':'Sign in with MetaMask'}</button></section>`;
+ main.innerHTML=`<header class="studio-heading"><div><h1>Admin sign-in.</h1><p>Event moderation, system health and the audit log.</p></div></header><section class="studio-empty"><h2>Connect an admin wallet</h2><p>The superadmin and wallets granted panel access can sign in here.</p><code class="wallet-address">Superadmin: ${esc(config.superAdminAddress||'')}</code><p>Use MetaMask and sign the login message. No private key or password is needed.</p>${session&&!session.admin?'<p class="inline-warning">Your current wallet has no panel access. Select an authorized account in MetaMask before signing in.</p>':''}<button id="admin-sign-in" class="button button-dark">${session?.admin?'Open admin panel':'Sign in with MetaMask'}</button></section>`;
  main.querySelector('#admin-sign-in').onclick=event=>busy(event.target,async()=>{
   if(!session?.admin)await connect();
-  if(!session?.admin)throw Error('This wallet is not the configured super admin. Switch accounts in MetaMask.');
+  if(!session?.admin)throw Error('This wallet has no admin panel access. Switch accounts in MetaMask.');
   location.hash='#admin';await render();
  });
 }

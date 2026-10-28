@@ -14,7 +14,7 @@ try {
   assert.equal((await provider.getNetwork()).chainId, 11155111n, 'Sepolia required');
   assert.notEqual(await provider.getCode(config.vars.CONTRACT_ADDRESS), '0x', 'Contract is missing');
   const contract = new Contract(config.vars.CONTRACT_ADDRESS, ABI, provider);
-  assert.equal((await contract.superAdmin()).toLowerCase(),config.vars.SUPER_ADMIN_ADDRESS.toLowerCase(),'Deploy the updated contract');
+  assert.equal((await contract.superAdmin()).toLowerCase(),getAddress(secrets.SUPER_ADMIN_ADDRESS).toLowerCase(),'Contract admin differs from .dev.vars');
   assert.equal((await contract.relayer()).toLowerCase(),issuer.address.toLowerCase(),'Contract relayer differs');
   const balance = await provider.getBalance(issuer.address);
   console.log(JSON.stringify({ contract: config.vars.CONTRACT_ADDRESS, issuer: issuer.address,

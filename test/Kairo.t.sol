@@ -38,13 +38,38 @@ contract KairoTest {
         assert(c.supportsInterface(0xb45a3c0e) && c.supportsInterface(0x80ac58cd));
     }
 
-    function testAdminCannotBeChangedOrAdded() public {
+    function testAdminTransfersOnlyAfterRecipientAccepts() public {
         assert(c.hasRole(c.DEFAULT_ADMIN_ROLE(), address(this)));
         assert(!c.hasRole(c.DEFAULT_ADMIN_ROLE(), STUDENT));
         bytes32 role = c.DEFAULT_ADMIN_ROLE();
         vm.expectRevert(); c.grantRole(role, STUDENT);
         vm.expectRevert(); c.revokeRole(role, address(this));
         vm.expectRevert(); c.renounceRole(role, address(this));
+        vm.expectRevert(); vm.prank(STUDENT); c.proposeSuperAdmin(STUDENT);
+        vm.expectRevert(); c.proposeSuperAdmin(address(0));
+        c.proposeSuperAdmin(STUDENT);
+        assert(c.superAdmin() == address(this) && c.pendingSuperAdmin() == STUDENT);
+        vm.expectRevert(); c.acceptSuperAdmin();
+        vm.prank(STUDENT); c.acceptSuperAdmin();
+        assert(c.superAdmin() == STUDENT && c.pendingSuperAdmin() == address(0));
+        assert(!c.hasRole(role, address(this)) && c.hasRole(role, STUDENT));
+        vm.expectRevert(); c.proposeSuperAdmin(address(0x456));
+        vm.prank(STUDENT); c.setEventPaused(1, true);
+        vm.expectRevert(); c.grantRole(role, address(this));
+    }
+    function testSuperAdminDelegatesAndRevokesPanelAccess() public {
+        bytes32 panel = c.PANEL_ADMIN_ROLE();
+        address another = address(0x456);
+        vm.expectRevert(); vm.prank(STUDENT); c.setPanelAdmin(STUDENT, true);
+        vm.expectRevert(); c.setPanelAdmin(address(0), true);
+        c.setPanelAdmin(STUDENT, true);
+        c.setPanelAdmin(another, true);
+        assert(c.hasRole(panel, STUDENT) && c.getRoleMemberCount(panel) == 2);
+        vm.expectRevert(); vm.prank(STUDENT); c.setPanelAdmin(address(0x789), true);
+        vm.expectRevert(); vm.prank(STUDENT); c.createEvent("ipfs://panel",1,uint64(block.timestamp),uint64(block.timestamp+100),STUDENT,STUDENT);
+        c.setPanelAdmin(STUDENT, false);
+        assert(!c.hasRole(panel, STUDENT) && c.getRoleMemberCount(panel) == 1);
+        assert(c.getRoleMember(panel, 0) == another);
     }
     function testRelayerPublishesWithoutAdminKey() public {
         Kairo sponsored = new Kairo(STUDENT, address(this), address(0));

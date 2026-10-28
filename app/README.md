@@ -1,6 +1,6 @@
 # Kairo Android
 
-The Android app renders the production [Kairo website](https://kairo-site-7fb.pages.dev) inside a native Expo WebView. It shares the website’s actual lavender, ink, cream and lime palette, typography, animated artwork, responsive layouts, and backend. There is no separate imitation interface or simulated data source. Website deployments update the interface without requiring another APK.
+The Android app renders the production [Kairo website](https://kairo.aakritigupta7227.workers.dev) inside a native Expo WebView. It shares the website’s actual lavender, ink, cream and lime palette, typography, animated artwork, responsive layouts, and backend. There is no separate imitation interface or simulated data source. Website deployments update the interface without requiring another APK.
 
 ## Real workflows
 

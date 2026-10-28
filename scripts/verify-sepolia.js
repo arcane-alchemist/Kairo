@@ -13,7 +13,7 @@ try {
  if(BigInt(await provider.send('eth_chainId',[]))!==11155111n)throw Error('Sepolia required');
  const contract=new Contract(config.CONTRACT_ADDRESS,ABI,provider);
  if(await provider.getCode(config.CONTRACT_ADDRESS)==='0x')throw Error('Contract missing');
- const admin=getAddress(config.SUPER_ADMIN_ADDRESS);
+ const admin=getAddress(values.SUPER_ADMIN_ADDRESS);
  const hasAdmin=await contract.hasRole(ZeroHash,admin);
  const report={chain:'Sepolia',contract:config.CONTRACT_ADDRESS,superAdmin:admin,configuredWalletHasAdmin:hasAdmin};
  const deployment=JSON.parse(readFileSync('deployments/sepolia.json','utf8'));
@@ -35,7 +35,7 @@ try {
   }
   report.currentAdmins=[...holders];report.onlyConfiguredAdmin=holders.size===1&&holders.has(admin);
  }
- try{report.fixedSuperAdmin=await contract.superAdmin();report.relayer=await contract.relayer();report.updatedContract=true;}
+ try{report.superAdminOnChain=await contract.superAdmin();report.relayer=await contract.relayer();report.updatedContract=true;}
  catch{report.updatedContract=false;report.requiredAction='The existing contract needs the updated bytecode before sponsored publishing and batching can work.';}
  report.relayerBalanceETH=formatEther(await provider.getBalance(config.ISSUER_ADDRESS));
  report.deployerKeyAvailable=Boolean(values.DEPLOYER_PRIVATE_KEY);

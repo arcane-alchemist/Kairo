@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {Wallet} from 'ethers';
 const base='http://localhost:8787',config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
 const values=parseEnv(readFileSync('.dev.vars','utf8')),wallet=new Wallet(values.ISSUER_PRIVATE_KEY);
-assert.notEqual(wallet.address.toLowerCase(),config.vars.SUPER_ADMIN_ADDRESS.toLowerCase(),'Never use the super admin private key for CLI checks');
+assert.notEqual(wallet.address.toLowerCase(),values.SUPER_ADMIN_ADDRESS.toLowerCase(),'Never use the super admin private key for CLI checks');
 let cookie='',art;
 async function request(path,input) {
  const response=await fetch(`${base}/api${path}`,{method:input===undefined?'GET':'POST',headers:{origin:base,'content-type':'application/json',...(cookie?{cookie}:{})},...(input===undefined?{}:{body:JSON.stringify(input)}),signal:AbortSignal.timeout(20000)});

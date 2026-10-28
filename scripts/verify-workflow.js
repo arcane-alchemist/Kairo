@@ -23,6 +23,7 @@ try {
   try{await provider.send('eth_chainId',[]);break;}catch(error){if(attempt===30)throw error;await delay(100);}
  }
  await provider.send('anvil_setBalance',[f.organizer.address,toQuantity(parseEther('100'))]);
+ await provider.send('anvil_setBalance',[f.admin.address,toQuantity(parseEther('1'))]);
  const artifact=JSON.parse(readFileSync('out/Kairo.sol/Kairo.json','utf8'));
  const contract=await new ContractFactory(artifact.abi,artifact.bytecode.object,f.organizer.connect(provider)).deploy(f.admin.address,f.organizer.address,ZeroAddress);
  await contract.waitForDeployment();
@@ -56,6 +57,14 @@ try {
  await settle('chain_actions',()=>actionNext(f.DB,f.chain));
  const publication=await request(`/publications/${id}`,undefined,owner);assert.equal(publication.status,'live');
  const [attendee,speaker]=publication.events.map(e=>e.id);checks.push('sponsored on-chain publication of an ongoing event with two roles');
+ await (await contract.connect(f.admin.connect(provider)).setPanelAdmin(f.outsider.address,true)).wait();
+ assert.equal((await request('/auth/me',undefined,outsider)).admin,true);
+ assert.equal((await request('/auth/me',undefined,outsider)).superAdmin,false);
+ assert.equal((await request('/admin/events',undefined,outsider)).events.length,2);
+ await (await contract.connect(f.admin.connect(provider)).setPanelAdmin(f.outsider.address,false)).wait();
+ assert.equal((await request('/auth/me',undefined,outsider)).admin,false);
+ await request('/admin/events',undefined,outsider,403);
+ checks.push('superadmin grants and revokes a second wallet without sharing keys');
  await request(`/admin/events/${attendee}`,{action:'edit',title:'Updated listing',description:'Updated event description',venue:'Hall B',category:'Community',club:'Updated club',campus:'North',eventStartsAt:seconds-120,eventEndsAt:seconds+4000,approximateAttendees:12},owner,403);
  await request(`/admin/events/${attendee}`,{action:'edit',title:'Updated listing',description:'Updated event description',venue:'Hall B',category:'Community',club:'Updated club',campus:'North',eventStartsAt:seconds-120,eventEndsAt:seconds+4000,approximateAttendees:12},admin);
  assert.equal((await request(`/events/${speaker}`)).venue,'Hall B');assert.equal((await contract.events(attendee)).uri,generated.uri);checks.push('admin edits across roles without changing published badge metadata');

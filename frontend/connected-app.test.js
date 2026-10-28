@@ -285,6 +285,25 @@ test('superadmin Activity is separate from request review and shows gas, network
  assert.doesNotMatch(ui.document.querySelector('#live-app').textContent,/Previous eventsNext events|config: ok|d1: ok|Previous actionsNext actions/);
  assert.match(ui.document.querySelector('.service-badge.is-ready').textContent,/Ready/);
 });
+test('only the superadmin can grant and revoke panel wallets from Activity',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',delegate='0x2222222222222222222222222222222222222222',calls=[];
+ const ethereum={isMetaMask:true,request:async({method})=>method==='eth_accounts'?[wallet]:'0xaa36a7',on(){},removeListener(){}};
+ class ContractMock {setPanelAdmin=async(address,allowed)=>{calls.push([address,allowed]);return {wait:async()=>({status:1})};}}
+ const respond=path=>{
+  if(path==='/api/auth/me')return {wallet,admin:true,superAdmin:true};
+  if(path==='/api/admin/system')return {relayer:wallet,signerAddress:wallet,balanceETH:'0.6',superAdminOnChain:true,panelAdmins:[delegate],actions:[]};
+  if(path==='/api/health')return {status:'ok',dependencies:{}};
+  if(path==='/api/admin/audit')return {rows:[],hasMore:false};
+ };
+ const ui=await setup({hash:'#admin/activity',ethereum,Contract:ContractMock,respond});
+ const form=ui.document.querySelector('#panel-admin-form');assert(form);
+ form.elements.wallet.value=delegate;form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(calls[0],[delegate,true]);
+ const button=ui.document.querySelector('[data-revoke-panel]');button.onclick();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(calls[1],[delegate,false]);
+ const delegated=await setup({hash:'#admin/activity',respond:path=>path==='/api/auth/me'?{wallet:delegate,admin:true,superAdmin:false}:respond(path)});
+ assert.equal(delegated.document.querySelector('#panel-admin-form'),null);
+});
 test('superadmin Review requests panel lists event requests without loading Activity',async()=>{
  const wallet='0x1111111111111111111111111111111111111111',now=Math.floor(Date.now()/1000);
  const ui=await setup({hash:'#admin',respond:path=>{
@@ -364,7 +383,7 @@ test('super admin has a separate MetaMask login and organizer studio hides syste
  assert.match(login.document.querySelector('#live-app').textContent,/No private key or password/);
  assert.equal(login.requests.some(([path])=>path.startsWith('/api/admin/')),false);
  const denied=await setup({hash:'#admin',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111',admin:false}:undefined});
- assert.match(denied.document.querySelector('#live-app').textContent,/not the super admin/);
+ assert.match(denied.document.querySelector('#live-app').textContent,/no panel access/);
  assert.equal(denied.requests.some(([path])=>path.startsWith('/api/admin/')),false);
  const studio=await setup({hash:'#issuer/studio',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111',admin:true}:undefined});
  assert.equal(studio.document.querySelector('#studio-system'),null);
@@ -435,7 +454,7 @@ test('superadmin dashboard submits recipient mints and accepts or rejects indivi
  const now=Math.floor(Date.now()/1000),address='0x1111111111111111111111111111111111111111',requestId=crypto.randomUUID();
  const event={id:7,title:'Campus workshop',description:'A coding workshop',roles:['Attendee'],listed:true,paused:false,mintStartsAt:now-60,mintEndsAt:now+3600};
  const ui=await setup({hash:'#admin/events/7',respond:(path,options)=>{
-  if(path==='/api/auth/me')return {wallet:address,admin:true};
+  if(path==='/api/auth/me')return {wallet:address,admin:true,superAdmin:true};
   if(path.startsWith('/api/admin/events?'))return {events:[event],publications:[]};
   if(path==='/api/events/7/dashboard')return {capRemaining:10};
   if(path.startsWith('/api/events/7/requests'))return {rows:[{id:requestId,wallet:address,status:'pending'}],hasMore:false};
@@ -540,13 +559,13 @@ test('a detached Gallery refresh cannot write into another page',async()=>{
 test('a restored superadmin session exposes its profile and the Create destination opens request management',async()=>{
  const address='0x1111111111111111111111111111111111111111';
  const ui=await setup({hash:'#organize',respond:path=>{
-  if(path==='/api/auth/me')return {wallet:address,admin:true};
+  if(path==='/api/auth/me')return {wallet:address,admin:true,superAdmin:true};
   if(path.startsWith('/api/admin/events?'))return {events:[{id:7,title:'Campus event',roles:['Attendee'],startsAt:1,listed:true,pendingRequests:3}],publications:[]};
   if(path==='/api/admin/audit')return {rows:[],hasMore:false};
   if(path==='/api/admin/system')return {actions:[]};
   if(path==='/api/health')return {status:'ok',dependencies:{}};
  }});
- assert.equal(ui.document.querySelector('#admin-profile').hidden,false);assert.match(ui.document.querySelector('#admin-profile').textContent,/Superadmin profile/);
+ assert.equal(ui.document.querySelector('#admin-profile').hidden,false);assert.match(ui.document.querySelector('#admin-profile').textContent,/Admin panel/);
  assert.equal(ui.document.querySelector('#admin-profile a').getAttribute('href'),'#admin');
  assert.match(ui.document.querySelector('#studio-events').textContent,/3 pending POAP requests/);
  assert.equal(ui.document.querySelector('.studio-event-actions a').getAttribute('href'),'#admin/events/7');

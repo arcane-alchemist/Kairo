@@ -8,7 +8,7 @@ export function deploymentWallet(config,args,values) {
  if(args.some(arg=>arg!=='--use-relayer')||args.length>1)throw Error('Only --use-relayer is supported: Sepolia only');
  const key=args.includes('--use-relayer')?values.ISSUER_PRIVATE_KEY:values.DEPLOYER_PRIVATE_KEY;
  let wallet;try{wallet=new Wallet(key);}catch{throw Error('A valid local deployment key is required; use --use-relayer for the saved relayer key.');}
- if(wallet.address===getAddress(config.vars.SUPER_ADMIN_ADDRESS))throw Error('Use a deployment wallet, never the super admin key');
+ if(wallet.address===getAddress(values.SUPER_ADMIN_ADDRESS))throw Error('Use a deployment wallet, never the super admin key');
  if(args.includes('--use-relayer')&&wallet.address!==getAddress(config.vars.ISSUER_ADDRESS))throw Error('The locally saved relayer key must match ISSUER_ADDRESS');
  return wallet;
 }
@@ -29,9 +29,8 @@ if ((await provider.getNetwork()).chainId !== BigInt(chainId)) throw new Error('
 execFileSync('forge', ['build'], { stdio: 'inherit' });
 const artifact = JSON.parse(readFileSync('out/Kairo.sol/Kairo.json'));
 const deployer = signer.connect(provider);
-const admin = getAddress(config.vars.SUPER_ADMIN_ADDRESS);
+const admin = getAddress(values.SUPER_ADMIN_ADDRESS);
 if (deployer.address === admin) throw Error('Use the existing deployer key, never the super admin key');
-if (process.env.SUPER_ADMIN_ADDRESS && getAddress(process.env.SUPER_ADMIN_ADDRESS) !== admin) throw Error('Super admin differs from config');
 const previous = config.vars.CONTRACT_ADDRESS && await provider.getCode(config.vars.CONTRACT_ADDRESS) !== '0x' ? getAddress(config.vars.CONTRACT_ADDRESS) : ZeroAddress;
 const fees = await provider.getFeeData();
 if (!fees.maxFeePerGas || fees.maxFeePerGas > parseUnits(config.vars.MAX_FEE_GWEI || '10','gwei')) throw Error('Gas exceeds configured ceiling');
