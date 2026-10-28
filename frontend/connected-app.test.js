@@ -43,7 +43,8 @@ test('connected home uses real API records and never falls back to sample badges
   assert.equal(empty.document.querySelectorAll('.card').length, 0);
   const ui = await setup({events:[{id:7,title:'Published event', description:'Live event', club:'Campus',category:'Technology',startsAt:1,endsAt:2,cap:5,remaining:5,mintStartsAt:1,mintEndsAt:2}]});
   assert.match(ui.document.querySelector('#badge-grid').textContent, /Published event/);
-  assert.match(ui.document.querySelector('.card-link').getAttribute('href'), /drop\/7/);
+  assert.equal(ui.document.querySelector('#badge-grid .card-link'),null);
+  assert.equal(ui.document.querySelector('#badge-grid .card-status, #badge-grid .pill, #badge-grid .card-club, #badge-grid .card-bottom'),null);
 });
 
 test('API failure renders retry and never silently supplies fixtures', async () => {
@@ -470,7 +471,8 @@ test('ended events appear as Past in the organizer studio and remain in public d
  assert.match(studio.document.querySelector('#studio-events').textContent,/Minting closed/);
  const discovery=await setup({hash:'#events',events:[event],respond});
  assert.match(discovery.document.querySelector('#live-app').textContent,/Past workshop/);
- assert.match(discovery.document.querySelector('#live-app').textContent,/Minting closed/);
+ assert.equal(discovery.document.querySelector('#live-app .card-bottom, #live-app .card-status, #live-app .pill'),null);
+ assert.match(discovery.document.querySelector('.past-event-card').textContent,/Past workshopHall A/);
  discovery.location.hash='#drop/7';await discovery.render();
  const dialog=discovery.document.querySelector('#modal');
  assert.match(dialog.textContent,/Minting has closed for this event/);
@@ -725,4 +727,13 @@ test('Gallery keeps the page loader visible until the minted POAP has been fetch
  await new Promise(resolve=>setImmediate(resolve));
  assert.match(ui.document.querySelector('#collection-grid').textContent,/Token #42/);
  assert.equal(ui.document.querySelector('#page-loader').hidden,true);
+});
+
+test('an expired shared recipient link shows artwork and a closed notice without mint controls',async()=>{
+ const expired={id:7,title:'Past workshop',description:'A day together',roles:['Attendee'],image:'https://kairo.test/media/art/badge.svg',mintStartsAt:1,mintEndsAt:2};
+ const ui=await setup({hash:'#redeem/'+'a'.repeat(32),respond:path=>path==='/api/redeem'?{event:expired,state:'issued'}:undefined});
+ assert.match(ui.document.querySelector('#live-app').textContent,/Minting has closed/);
+ assert(ui.document.querySelector('#live-app img'));
+ assert.equal(ui.document.querySelector('#claim-mint'),null);
+ assert.equal(ui.requests.some(([path])=>path==='/api/redeem/claim'),false);
 });
