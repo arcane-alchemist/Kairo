@@ -57,7 +57,7 @@ function eventRecord(row) {
     venue: row.venue, image: row.image, uri: row.uri, animationUrl: row.animation_url || null, startsAt: row.event_starts_at ?? row.starts_at, endsAt: row.event_ends_at ?? row.ends_at,
     mintStartsAt: row.starts_at, mintEndsAt: row.ends_at, dropId: row.id,
     deleted:Boolean(row.deleted_at),status:row.deleted_at?'deleted':row.listed===0?'rejected':row.paused?'paused':(row.event_ends_at??row.ends_at)<now()?'past':(row.event_starts_at??row.starts_at)>now()?'upcoming':'live',
-    approximateAttendees:row.approximate_attendees, verified:Boolean(row.verified), paused:Boolean(row.paused), listed:Boolean(row.listed), cap:row.cap, organizer:row.organizer };
+    approval:row.approval, approximateAttendees:row.approximate_attendees, verified:Boolean(row.verified), paused:Boolean(row.paused), listed:Boolean(row.listed), cap:row.cap, organizer:row.organizer };
 }
 
 export function createHandler(chainFactory = connectChain) {

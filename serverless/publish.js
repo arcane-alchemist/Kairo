@@ -44,8 +44,8 @@ export async function actionNext(db,chain) {
    if(ids.length!==payload.roleArtwork.length)throw Error('Publication receipt does not match roles');
    for(let index=0;index<ids.length;index++) {
     const art=payload.roleArtwork[index];
-    writes.push(db.prepare(`INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,cap,organizer,created_at,event_starts_at,event_ends_at,campus,roles,animation_url,group_id,approximate_attendees)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(ids[index],payload.title,payload.description,payload.club,payload.category,payload.venue,art.image,art.uri,payload.mintStartsAt,payload.mintEndsAt,art.cap,payload.organizer,now(),payload.eventStartsAt,payload.eventEndsAt,payload.campus,JSON.stringify([art.role]),art.animationUrl||null,action.id,payload.approximateAttendees));
+    writes.push(db.prepare(`INSERT INTO events(id,title,description,club,category,venue,image,uri,starts_at,ends_at,cap,organizer,created_at,event_starts_at,event_ends_at,campus,roles,animation_url,group_id,approximate_attendees,approval)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(ids[index],payload.title,payload.description,payload.club,payload.category,payload.venue,art.image,art.uri,payload.mintStartsAt,payload.mintEndsAt,art.cap,payload.organizer,now(),payload.eventStartsAt,payload.eventEndsAt,payload.campus,JSON.stringify([art.role]),art.animationUrl||null,action.id,payload.approximateAttendees,'pending'));
    }
   }
   writes.push(db.prepare("UPDATE chain_actions SET status='live',error=NULL,tx_hash=?,updated_at=? WHERE id=?").bind(action.tx_hash,now(),action.id));

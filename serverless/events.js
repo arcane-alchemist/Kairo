@@ -18,6 +18,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   return event;
  }
  async function eligibility(event,chain) {
+  if(event?.approval==='pending')throw new HttpError(409,'This event is awaiting super-admin approval');
   if(!event?.listed||event.paused)throw new HttpError(409,'Event is unlisted or paused');
   const onchain=await chain.event(event.id);
   if(!onchain.cap||onchain.paused||now()<Number(onchain.startsAt)||now()>Number(onchain.endsAt)||Number(onchain.minted)>=Number(onchain.cap))throw new HttpError(409,'Minting window closed, paused, or cap reached');
@@ -125,11 +126,11 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
    if(start>=end)throw new HttpError(400,'Event start must be before its end');
    for(const target of ids)writes.push(env.DB.prepare('UPDATE events SET title=?,description=?,venue=?,category=?,club=?,campus=?,event_starts_at=?,event_ends_at=?,approximate_attendees=? WHERE id=?').bind(input.title,input.description,input.venue,input.category,input.club??listing.club,input.campus??listing.campus,start,end,input.approximateAttendees??listing.approximate_attendees,target));
   }
-  else if(input.action==='verify')for(const target of ids)writes.push(env.DB.prepare('UPDATE events SET verified=1 WHERE id=?').bind(target));
+  else if(input.action==='verify')for(const target of ids)writes.push(env.DB.prepare("UPDATE events SET verified=1,approval='approved' WHERE id=?").bind(target));
   else {
    const paused=input.action!=='resume';
    if(!paused&&affected.results.some(row=>!row.listed))throw new HttpError(409,'Rejected events cannot resume');
-   for(const target of ids)writes.push(input.action==='reject'?env.DB.prepare('UPDATE events SET listed=0,paused=1,rejection_reason=? WHERE id=?').bind(input.reason,target):env.DB.prepare('UPDATE events SET paused=? WHERE id=?').bind(Number(paused),target));
+   for(const target of ids)writes.push(input.action==='reject'?env.DB.prepare("UPDATE events SET listed=0,paused=1,approval='rejected',rejection_reason=? WHERE id=?").bind(input.reason,target):env.DB.prepare('UPDATE events SET paused=? WHERE id=?').bind(Number(paused),target));
    writes.push(env.DB.prepare("INSERT INTO chain_actions(id,wallet,kind,payload,created_at) VALUES(?,?,'pause',?,?)").bind(crypto.randomUUID(),wallet,JSON.stringify({ids,paused}),now()));
   }
   writes.push(audit(wallet,id,input.action,{...input,affectedIds:ids}));
@@ -218,7 +219,8 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   if(post) {
    z.object({permanentConsent:z.literal(true)}).strict().parse(await body(request));
    const event=await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
-   if(!event?.listed||event.paused)throw new HttpError(409,'Event unavailable or paused');
+   if(event?.approval==='pending')throw new HttpError(409,'This event is awaiting super-admin approval');
+  if(!event?.listed||event.paused)throw new HttpError(409,'Event unavailable or paused');
    const chain=await chainFactory(env),onchain=await chain.event(id);
    if(!onchain.cap||onchain.paused||now()>Number(onchain.endsAt)||Number(onchain.minted)>=Number(onchain.cap))throw new HttpError(409,'Minting has ended, is paused, or supply is exhausted');
    if(await chain.token(id,wallet)!=='0'||await env.DB.prepare("SELECT c.id FROM claims c JOIN jobs j ON j.id=c.id WHERE event_id=? AND wallet=? COLLATE NOCASE AND j.status!='failed'").bind(id,wallet).first())throw new HttpError(409,'This wallet already claimed this role');
@@ -253,7 +255,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
    input=direct?z.object({wallet:z.string().trim().refine(value=>{try{return getAddress(value)!==ZeroAddress;}catch{return false;}},'Enter a valid nonzero Ethereum address')}).strict().parse(await body(request)):{};
    wallet=poapRequest?.wallet||getAddress(input.wallet);
   } else {
-   wallet=await user(request,env);input=z.object({permanentConsent:z.literal(true),qr:z.string().max(150).optional(),token:z.string().regex(/^[a-f0-9]{32}$/).optional()}).strict().parse(await body(request));
+   wallet=await user(request,env);input=z.object({permanentConsent:z.literal(true),publicLink:z.boolean().optional(),qr:z.string().max(150).optional(),token:z.string().regex(/^[a-f0-9]{32}$/).optional()}).strict().parse(await body(request));
   }
   let link;
   if(redemption) {
@@ -262,17 +264,17 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   }
   const id=link?.event_id||idSchema.parse((direct||decision||claim)[1]),event=await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
   const chain=await chainFactory(env),onchain=await eligibility(event,chain);
-  if(!actor&&!link&&(JSON.parse(event.roles)[0].toLowerCase()!=='attendee'||!await validQR(env.QR_HMAC_SECRET,id,input.qr)))throw new HttpError(403,'Walk-in QR expired or invalid. Scan the live screen again');
+  if(!actor&&!link&&!input.publicLink&&(JSON.parse(event.roles)[0].toLowerCase()!=='attendee'||!await validQR(env.QR_HMAC_SECRET,id,input.qr)))throw new HttpError(403,'Walk-in QR expired or invalid. Scan the live screen again');
   if(await chain.token(id,wallet)!=='0')throw new HttpError(409,'This wallet already minted this role');
   const previous=await env.DB.prepare('SELECT id FROM claims WHERE event_id=? AND wallet=? COLLATE NOCASE').bind(id,wallet).first();
   const ticket=previous?.id||crypto.randomUUID(),attempt=crypto.randomUUID(),timestamp=now();
   const insert=env.DB.prepare(`INSERT INTO claims(id,event_id,wallet,method,created_at,attempt_id)
    SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM claims c JOIN jobs j ON c.id=j.id WHERE c.event_id=? AND j.status IN ('pending','submitted'))<?
-   AND EXISTS(SELECT 1 FROM events WHERE id=? AND listed=1 AND paused=0)
+   AND EXISTS(SELECT 1 FROM events WHERE id=? AND listed=1 AND paused=0 AND approval='approved')
    ${poapRequest?"AND EXISTS(SELECT 1 FROM poap_requests WHERE id=? AND status='pending')":''}
    ${link?"AND EXISTS(SELECT 1 FROM links WHERE id=? AND state='issued' AND revoked_at IS NULL)":''}
    ON CONFLICT(event_id,wallet) DO UPDATE SET attempt_id=excluded.attempt_id,method=excluded.method WHERE EXISTS(SELECT 1 FROM jobs WHERE id=claims.id AND status='failed')`)
-   .bind(ticket,id,wallet,actor?'ADMIN':link?'LINK':'QR',timestamp,attempt,id,Number(onchain.cap)-Number(onchain.minted),id,...(poapRequest?[poapRequest.id]:[]),...(link?[link.id]:[]));
+   .bind(ticket,id,wallet,actor?'ADMIN':link||input.publicLink?'LINK':'QR',timestamp,attempt,id,Number(onchain.cap)-Number(onchain.minted),id,...(poapRequest?[poapRequest.id]:[]),...(link?[link.id]:[]));
   await env.DB.batch([insert,
    env.DB.prepare(`INSERT INTO jobs(id,created_at) SELECT id,? FROM claims WHERE id=? AND attempt_id=? ON CONFLICT(id) DO UPDATE SET status='pending',raw_tx=NULL,tx_hash=NULL,error=NULL,attempts=0 WHERE jobs.status='failed'`).bind(timestamp,ticket,attempt),
    ...(actor?[env.DB.prepare("INSERT INTO admin_audit SELECT ?,?,?,?, ?,? WHERE EXISTS(SELECT 1 FROM claims WHERE id=? AND attempt_id=?)").bind(crypto.randomUUID(),actor,id,poapRequest?'accept-request':'direct-mint',JSON.stringify({wallet,requestId:poapRequest?.id}),timestamp,ticket,attempt)]:[]),

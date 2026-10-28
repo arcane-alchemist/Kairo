@@ -7,8 +7,8 @@ const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const showTicket = source.slice(source.indexOf('async function showTicket('), source.indexOf('\nfunction walletHeader()'));
 test('QR claims show only pending status until confirmation, then the minted artwork', async () => {
   for (const status of ['queued', 'confirmed']) {
-    const statusNode = {};
-    const main = { innerHTML: '', querySelector: selector => selector === '#mint-status' && main.innerHTML.includes('id="mint-status"') ? statusNode : null };
+    const statusNode = {}, importButton = {};
+    const main = { innerHTML: '', querySelector: selector => selector === '#mint-status' && main.innerHTML.includes('id="mint-status"') ? statusNode : selector === '#mint-add-metamask' ? importButton : null };
     const context = vm.createContext({config:{chainName:'Sepolia'}, main, modalBody: {}, modal: { open: false }, close() {}, clearInterval() {}, setInterval() {}, ticketTimer: null, ticketView: 0,
       date:String,time:String,esc: String, artwork: () => '<img src="hacktober.png">', location: { origin: 'https://kairo.test' }, window: {}, config: { contractAddress: 'contract' }, txLink: () => 'https://sepolia.test/tx',
       api: async () => ({ status, claimed_at: 1, wallet: 'wallet', token_id: '2' }),
@@ -17,7 +17,7 @@ test('QR claims show only pending status until confirmation, then the minted art
     assert.equal(main.innerHTML.includes('POAP minted!'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('A day of building together.'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('hacktober.png'), status === 'confirmed');
-    assert.equal(main.innerHTML.includes('Add to MetaMask'), false);
+    assert.equal(main.innerHTML.includes('Add to MetaMask'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('ticket-qr'), false);
     assert.equal(main.innerHTML.includes('claim-mint'), false);
   }
@@ -62,7 +62,7 @@ test('wallet connects and switches to Sepolia before requesting the sign-in sign
   const context=vm.createContext({BrowserProvider:Provider,hexlify,toUtf8Bytes,connectedWallet:'0xwallet',walletRevision:0,signInRequest:Promise.resolve(),logoutRequest:Promise.resolve(),walletClient:{provider:injected},
     config:{chainId:11155111,chainName:'Sepolia'},chainHex:()=> '0xaa36a7',connectWallet:async()=>{},walletHeader(){},updateNetwork:async()=>{context.activeChain=await injected.request({method:'eth_chainId'});},
     post:async(path)=>{steps.push(path);return {message:'Sign in'};},api:async()=>({wallet:'0xwallet'}),document:{querySelector:()=>({})},short:String,toast(){},session:null});
-  const start=source.indexOf('async function connect(accountChanged = false)');
+  const start=source.indexOf('async function connect(');
   await vm.runInContext(source.slice(source.indexOf('async function switchNetwork()'),source.indexOf('function headerConnect()'))+source.slice(start,source.indexOf("\ndocument.querySelector('#wallet').onclick",start))+'\nconnect()',context);
   assert(steps.indexOf('wallet_switchEthereumChain')<steps.indexOf('personal_sign'));
   assert(steps.indexOf('personal_sign')<steps.indexOf('/auth/verify'));
@@ -84,7 +84,7 @@ test('read-only wallet connection requests accounts without signatures, minting 
   const context = vm.createContext({ chainHex(){},connectedWallet: '', session:null, walletRevision:0, chooseWallet:async()=> 'metamask',walletClient:{connect:async()=>{methods.push('MetaMask permission flow');return '0xwallet';}}, getAddress: value => value, short: value => value,
     window: { ethereum: { request: async ({ method }) => { methods.push(method); return ['0xwallet']; } } },
     document: { querySelector: () => ({}) }, updateNetwork: async () => {} });
-  const start = source.indexOf('async function connectWallet()');
+  const start = source.indexOf('async function connectWallet(');
   await vm.runInContext(source.slice(start, source.indexOf('\nasync function updateNetwork()', start)) + '\nconnectWallet()', context);
   assert.deepEqual(methods, ['MetaMask permission flow']);
   assert.equal(context.connectedWallet, '0xwallet');
@@ -94,7 +94,7 @@ test('read-only wallet connection requests accounts without signatures, minting 
 test('a late account approval cannot replace a connection invalidated by a wallet change',async()=>{
   const context=vm.createContext({chainHex(){},connectedWallet:'',session:null,walletRevision:0,chooseWallet:async()=> 'metamask',document:{querySelector:()=>({})},getAddress:value=>value,short:String,updateNetwork:async()=>{}});
   context.walletClient={connect:async()=>{context.walletRevision++;return '0xwallet';},disconnect(){}};
-  const start=source.indexOf('async function connectWallet()');
+  const start=source.indexOf('async function connectWallet(');
   await assert.rejects(vm.runInContext(source.slice(start,source.indexOf('\nasync function updateNetwork()',start))+'\nconnectWallet()',context),/Wallet changed/);
   assert.equal(context.connectedWallet,'');
 });

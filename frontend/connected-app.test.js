@@ -26,7 +26,7 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    installPrivy(){}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -219,11 +219,11 @@ test('failed, malformed and partial wallet responses never render an empty colle
  }
 });
 
-test('discovery lists live, upcoming and past events below searchable category controls',async()=>{
+test('discovery only lists past events below searchable category controls',async()=>{
  const now=Date.now()/1000;
  const ui=await setup({hash:'#events',events:[{id:1,title:'Live workshop',startsAt:now-100,endsAt:now+100,category:'Workshop'},{id:2,title:'Future workshop',startsAt:now+200,endsAt:now+400,category:'Workshop'},{id:3,title:'Old art show',startsAt:now-400,endsAt:now-200,category:'Arts'}]});
- const sections=ui.document.querySelectorAll('.event-period');assert.equal(sections.length,3);
- assert.match(sections[0].textContent,/Live events.*Live workshop/s);assert.match(sections[1].textContent,/Upcoming events.*Future workshop/s);assert.match(sections[2].textContent,/Past events.*Old art show/s);
+ const sections=ui.document.querySelectorAll('.event-period');assert.equal(sections.length,1);
+ assert.match(sections[0].textContent,/Past events.*Old art show/s);assert(!ui.document.querySelector('#live-events').textContent.includes('Live workshop'));assert(!ui.document.querySelector('#live-events').textContent.includes('Future workshop'));
  assert(ui.document.querySelector('.event-search svg'));
  const search=ui.document.querySelector('#live-search');search.value='workshop';search.oninput();assert(!ui.document.querySelector('#live-events').textContent.includes('Old art show'));
 });
@@ -286,7 +286,8 @@ test('any signed-in organizer directly publishes distinct generated roles and re
  const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
  for(const [key,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee, Judge',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[key],'value',{configurable:true,writable:true,value});
  assert.equal(form.elements.organizer,undefined);assert.equal(ui.document.querySelector('#submit-event'),null);
- const generate=ui.document.querySelector('#generate-poap');await generate.onclick({target:generate});
+ form.elements.roles.oninput();
+ for(let i=0;i<2;i++){const generate=ui.document.querySelector(`[data-generate-role="${i}"]`);await generate.onclick({target:generate});}
  form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  const posts=ui.requests.filter(([path,options])=>path==='/api/organizer/events'&&options.method==='POST');assert.equal(posts.length,1);
  const payload=JSON.parse(posts[0][1].body);assert.deepEqual(payload.roleArtwork.map(art=>art.role),['Attendee','Judge']);assert.equal(new Set(payload.roleArtwork.map(art=>art.uri)).size,2);
@@ -383,7 +384,7 @@ test('a contract setup failure leaves the form retryable; an uncertain request e
   vm.runInContext("session={wallet:'0x1111111111111111111111111111111111111111',admin:false}; createEventPage()",ui.context);
   const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
   for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
-  const generate=ui.document.querySelector('#generate-poap');await generate.onclick({target:generate});
+  const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});
   form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
   if(failure==='CONTRACT_MISMATCH'){
    assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);assert.match(ui.document.querySelector('#publish-status').textContent,/Update the Kairo contract/);
@@ -554,7 +555,7 @@ test('clearing a saved publication resets the editor and permits a fresh publica
  assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);assert.equal(ui.document.querySelector('#resume-event'),null);assert.equal(payloads.length,0);assert.equal(ui.document.querySelector('#request-error').hidden,true);
  const form=ui.document.querySelector('#event-form');assert.equal(form.elements.title.value,'');form.reportValidity=()=>true;
  for(const [name,value]of Object.entries({title:'New campus workshop',description:'A new coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
- const generate=ui.document.querySelector('#generate-poap');await generate.onclick({target:generate});
+ const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});
  form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(payloads.length,1);assert.notEqual(payloads[0].id,oldId);assert.equal(payloads[0].title,'New campus workshop');
 });
@@ -566,7 +567,7 @@ test('artwork finishing after navigation cannot write into the next page or publ
   if(path==='/api/artwork')return new Promise(resolve=>{finishArtwork=()=>resolve({image:'https://kairo.test/media/art/badge.svg',uri:'https://kairo.test/media/metadata/badge.json'});});
  }});
  const form=ui.document.querySelector('#event-form');form.elements.title.value='Campus workshop';form.elements.description.value='A coding workshop';
- const generation=ui.document.querySelector('#generate-poap').onclick({target:ui.document.querySelector('#generate-poap')});
+ const generation=ui.document.querySelector('[data-generate-role]').onclick({target:ui.document.querySelector('[data-generate-role]')});
  await new Promise(resolve=>setImmediate(resolve));assert.equal(typeof finishArtwork,'function');
  ui.location.hash='#events';await ui.render();finishArtwork();await generation;
  assert(ui.document.querySelector('#live-events'));assert.equal(ui.document.querySelector('#role-designs'),null);
@@ -616,7 +617,7 @@ test('superadmin publication completion opens its event request dashboard automa
  assert(ui.document.querySelector('#live-app a[href="#admin/events"]'));
  const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
  for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop',club:'Code club',category:'Workshop',campus:'Campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
- const generate=ui.document.querySelector('#generate-poap');await generate.onclick({target:generate});form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(ui.location.hash,'admin/events/7');assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);
 });
 
@@ -703,4 +704,25 @@ test('MetaMask import validates the receiving account and handles unsupported wa
   if(scenario==='cancelled')assert.match(ui.document.querySelector('#toast').textContent,/cancelled/);
   assert.equal(ui.document.querySelectorAll('.gallery-badge').length,1);
  }
+});
+
+test('Generate POAP replaces a custom upload after successful generation',async()=>{
+ const ui=await setup({hash:'#create',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111'}:path==='/api/artwork'?{image:'https://kairo.test/media/art/generated.svg',uri:'https://kairo.test/media/metadata/generated.json'}:undefined});
+ vm.runInContext("FileReader=class {readAsDataURL(file){this.result=file.data;this.onload();}}",ui.context);
+ const form=ui.document.querySelector('#event-form');form.elements.title.value='Campus workshop';form.elements.description.value='A coding workshop';
+ assert.equal(form.querySelector('#generate-poap'),null);assert.equal(form.querySelector('input[type="checkbox"][required]'),null);
+ const input=form.querySelector('input[type="file"]');Object.defineProperty(input,'files',{value:[{type:'image/png',size:20,data:'data:image/png;base64,custom'}]});input.onchange({target:input});
+ const generate=form.querySelector('[data-generate-role]');await generate.onclick({target:generate});
+ const artworkRequest=ui.requests.find(([path])=>path==='/api/artwork');assert(artworkRequest);assert.equal('image' in JSON.parse(artworkRequest[1].body),false);
+ assert.equal(form.querySelector('#art-preview').getAttribute('src'),'https://kairo.test/media/art/generated.svg');
+});
+
+test('Gallery keeps the page loader visible until the minted POAP has been fetched',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';let finish;
+ const ui=await setup({hash:'#gallery',respond:path=>path==='/api/auth/me'?{wallet}:path.startsWith('/api/wallet-collection')?new Promise(resolve=>{finish=resolve;}):undefined});
+ assert.equal(typeof finish,'function');assert.equal(ui.document.querySelector('#page-loader').hidden,false);
+ finish({total:1,pending:0,nextCursor:null,items:[{id:7,tokenId:'42',title:'Campus workshop',role:'Attendee',ownershipVerified:true,contractAddress:'0x1111111111111111111111111111111111111111'}]});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.match(ui.document.querySelector('#collection-grid').textContent,/Token #42/);
+ assert.equal(ui.document.querySelector('#page-loader').hidden,true);
 });

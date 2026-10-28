@@ -89,3 +89,23 @@ test('multiple approved accounts are revoked and never attached as a Kairo conne
  assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_accounts','wallet_revokePermissions']);
  accounts=[second];assert.equal(await wallet.connect(),second);assert.equal(wallet.provider,mm);
 });
+
+test('Privy selected wallets use the shared provider and session lifecycle', async () => {
+ const listeners=new Map(),address='0x1111111111111111111111111111111111111111';
+ const provider={request:async()=>[address],on:(name,fn)=>listeners.set(name,fn),removeListener:name=>listeners.delete(name)};
+ let disconnected=false;
+ const win={addEventListener(){},dispatchEvent(){},Event:class{},kairoPrivy:{connect:async()=>({address,provider,name:'rainbow'}),restore:async()=>({address,provider,name:'rainbow'}),disconnect:async()=>{disconnected=true;}}};
+ const wallet=metaMaskWallet(win);
+ assert.equal(await wallet.connect(),address);assert.equal(wallet.provider,provider);
+ await wallet.disconnect();assert(disconnected);assert.throws(()=>wallet.provider);
+ await wallet.restore(address);assert.equal(wallet.provider,provider);
+});
+
+test('Privy account switching requests MetaMask account selection and uses the newly approved account',async()=>{
+ const old='0x1111111111111111111111111111111111111111',next='0x2222222222222222222222222222222222222222',methods=[];
+ let walletList;
+ const provider={request:async({method})=>{methods.push(method);return method==='eth_accounts'?[next]:[];},on(){},removeListener(){}};
+ const win={addEventListener(){},dispatchEvent(){},Event:class{},kairoPrivy:{connect:async list=>{walletList=list;return {address:old,provider,name:'metamask'};}}};
+ const wallet=metaMaskWallet(win);assert.equal(await wallet.connect('metamask',{switchAccount:true}),next);
+ assert.deepEqual(walletList,['metamask']);assert.deepEqual(methods,['wallet_requestPermissions','eth_accounts']);assert.equal(wallet.provider,provider);
+});

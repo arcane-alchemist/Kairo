@@ -35,15 +35,30 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
     get name() { return wallets().find(item => item.id === walletId)?.name || 'Wallet'; },
     get wallets() { return wallets().filter(item => item.id === 'metamask').map(({id,name}) => ({id,name})); },
     get lastUsed() { return lastUsed(); },
-    restore() { const entry = wallets().find(item => item.id === 'metamask' && item.provider); if (entry) attach(entry); },
+    async restore(address) { if(win.kairoPrivy){const entry=await win.kairoPrivy.restore(address);if(entry){attach({id:entry.name||'privy',provider:entry.provider});return;}} const entry = wallets().find(item => item.id === 'metamask' && item.provider); if (entry) attach(entry); },
     async disconnect() {
       const provider = selected; detach();
       try { await provider?.request({method:'wallet_revokePermissions',params:[{eth_accounts:{}}]}); } catch { /* Wallets may not implement permission revocation. */ }
       await mobile?.disconnect().catch(() => {});
+      await win.kairoPrivy?.disconnect();
     },
-    async connect(id = 'metamask') {
+    async connect(id = 'metamask', {switchAccount=false} = {}) {
       if (id !== 'metamask') throw Error('Kairo connects with MetaMask only.');
       if (pending) throw Error('A wallet permission request is already open. Review it in your wallet.');
+      if(win.kairoPrivy){
+        pending=true;
+        try {
+          const wallet=await win.kairoPrivy.connect(switchAccount?['metamask']:undefined);
+          if(!/^0x[\da-f]{40}$/i.test(wallet.address)||typeof wallet.provider?.request!=='function')throw Error('The wallet did not return a valid Ethereum account.');
+          if(switchAccount){
+            await wallet.provider.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]});
+            const accounts=await wallet.provider.request({method:'eth_accounts'});
+            if(accounts.length!==1||!/^0x[\da-f]{40}$/i.test(accounts[0]))throw Error('Select exactly one MetaMask account.');
+            wallet.address=accounts[0];
+          }
+          attach({id:wallet.name||'privy',provider:wallet.provider});return wallet.address;
+        }finally{pending=false;}
+      }
       const entry = wallets().find(item => item.id === id);
       if (!entry?.provider && !(id === 'metamask' && isNativeApp(win))) throw Error(`${entry?.name || 'Wallet'} was not detected. Install its extension or open Kairo in that wallet’s mobile browser.`);
       pending = true; detach();
