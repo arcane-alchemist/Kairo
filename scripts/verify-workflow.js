@@ -59,6 +59,8 @@ try {
  await request(`/admin/events/${attendee}`,{action:'edit',title:'Updated listing',description:'Updated event description',venue:'Hall B',category:'Community',club:'Updated club',campus:'North',eventStartsAt:seconds-120,eventEndsAt:seconds+4000,approximateAttendees:12},owner,403);
  await request(`/admin/events/${attendee}`,{action:'edit',title:'Updated listing',description:'Updated event description',venue:'Hall B',category:'Community',club:'Updated club',campus:'North',eventStartsAt:seconds-120,eventEndsAt:seconds+4000,approximateAttendees:12},admin);
  assert.equal((await request(`/events/${speaker}`)).venue,'Hall B');assert.equal((await contract.events(attendee)).uri,generated.uri);checks.push('admin edits across roles without changing published badge metadata');
+ await request(`/organizer/events/${attendee}`,{action:'edit',title:'Creator updated listing',description:'Creator revised event details',venue:'Hall C',category:'Workshop',club:'Community',campus:'South',eventStartsAt:seconds-120,eventEndsAt:seconds+4000,approximateAttendees:15},owner);
+ assert.equal((await request(`/events/${speaker}`)).venue,'Hall C');assert.equal((await contract.events(attendee)).uri,generated.uri);checks.push('creator edits every published role without changing immutable NFT metadata');
  const wanted=await request(`/events/${attendee}/requests`,{permanentConsent:true},participant,201);
  const rejected=await request(`/events/${attendee}/requests`,{permanentConsent:true},outsider,201);
  await request(`/admin/events/${attendee}/requests/${rejected.id}/reject`,{},admin);
@@ -82,6 +84,29 @@ try {
  await request(`/admin/events/${attendee}/mint`,{wallet:f.admin.address},admin,409);
  await request(`/admin/events/${attendee}`,{action:'resume'},admin,202);await settle('chain_actions',()=>actionNext(f.DB,f.chain));
  await request(`/admin/events/${attendee}/mint`,{wallet:f.admin.address},admin,202);await settle('jobs',()=>mintNext(f.DB,f.chain));checks.push('group pause/resume and minting after resume');
+ await request(`/organizer/events/${attendee}`,{action:'delete'},owner,202);await settle('chain_actions',()=>actionNext(f.DB,f.chain));
+ assert.equal((await contract.events(attendee)).paused,true);assert.equal((await contract.events(speaker)).paused,true);
+ assert.equal((await request('/events')).length,0);await request(`/events/${attendee}`,undefined,undefined,404);
+ assert.equal((await request('/organizer/events',undefined,owner)).events.length,0);
+ assert.equal((await request(`/wallet-collection?wallet=${f.participant.address}`)).items.length,2);
+ await request(`/admin/events/${attendee}/mint`,{wallet:f.outsider.address},admin,409);
+ checks.push('creator deletion pauses both roles on chain, removes discovery and preserves minted Gallery badges');
+ const expiredTitle='Past event verification',expiredDescription='A finished event whose mint window is closed.';
+ const expiredArt=await request('/artwork',{name:expiredTitle,description:expiredDescription,role:'Attendee'},owner);
+ const expiredId=crypto.randomUUID(),shortStart=Math.floor(Date.now()/1000);
+ await request('/organizer/events',{id:expiredId,title:expiredTitle,description:expiredDescription,club:'Community',category:'Workshop',venue:'Hall D',approximateAttendees:5,eventStartsAt:shortStart-60,eventEndsAt:shortStart+60,mintStartsAt:shortStart-60,mintEndsAt:shortStart+60,roleArtwork:[{role:'Attendee',cap:5,...expiredArt}]},owner,202);
+ await settle('chain_actions',()=>actionNext(f.DB,f.chain));
+ const pastId=(await request(`/publications/${expiredId}`,undefined,owner)).events[0].id;
+ const future=shortStart+120;await provider.send('evm_setNextBlockTimestamp',[future]);await provider.send('evm_mine',[]);
+ const actualNow=Date.now;Date.now=()=>future*1000;
+ try {
+  const listing=await request('/events');assert.equal(listing.length,1);assert.equal(listing[0].status,'past');
+  await request(`/events/${pastId}/requests`,{permanentConsent:true},participant,409);
+  await request(`/admin/events/${pastId}/mint`,{wallet:f.outsider.address},admin,409);
+  await request(`/events/${pastId}/qr`,undefined,owner,409);
+  await assert.rejects(contract.connect(f.organizer.connect(provider)).mintAttendance.staticCall(pastId,f.outsider.address));
+ }finally{Date.now=actualNow;}
+ checks.push('expired event remains public as Past while API and contract reject new mints');
  assert.deepEqual(f.sqlite.prepare('PRAGMA foreign_key_check').all(),[]);
  console.log(JSON.stringify({status:'PASS',network:'isolated local EVM, chain ID 11155111',checks,confirmedMints:f.sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status='confirmed'").get().count,liveSepoliaTransactions:0},null,2));
 } finally {

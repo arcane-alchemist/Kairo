@@ -28,7 +28,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   const wallet=await user(request,env),page=z.coerce.number().int().min(0).parse(url.searchParams.get('page')||0);
   const allEvents=path==='/api/admin/events';
   if(allEvents&&!admin(wallet))throw new HttpError(403,'Super admin only');
-  const {results}=await env.DB.prepare(allEvents?"SELECT e.*,(SELECT COUNT(*) FROM poap_requests r WHERE r.event_id=e.id AND r.status='pending') AS pending_requests FROM events e ORDER BY e.created_at DESC,e.id DESC LIMIT 201 OFFSET ?":'SELECT * FROM events WHERE organizer=? COLLATE NOCASE ORDER BY created_at DESC,id DESC LIMIT 201 OFFSET ?').bind(...(allEvents?[]:[wallet]),page*200).all();
+  const {results}=await env.DB.prepare(allEvents?"SELECT e.*,(SELECT COUNT(*) FROM poap_requests r WHERE r.event_id=e.id AND r.status='pending') AS pending_requests FROM events e ORDER BY e.created_at DESC,e.id DESC LIMIT 201 OFFSET ?":'SELECT * FROM events WHERE organizer=? COLLATE NOCASE AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 201 OFFSET ?').bind(...(allEvents?[]:[wallet]),page*200).all();
   const actions=await env.DB.prepare("SELECT id,status,payload,tx_hash,error FROM chain_actions WHERE kind='publish' AND wallet=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 100").bind(wallet).all();
   return json({events:results.slice(0,200).map(row=>allEvents?{...publicEvent(row),pendingRequests:row.pending_requests}:publicEvent(row)),hasMore:results.length>200,publications:actions.results.map(row=>({...row,details:JSON.parse(row.payload)}))});
  }
@@ -89,20 +89,37 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   let signerAddress=null;try{signerAddress=new Wallet(env.ISSUER_PRIVATE_KEY).address;}catch{}
   return json({actions:actions.results,contractAddress:env.CONTRACT_ADDRESS,superAdminAddress:env.SUPER_ADMIN_ADDRESS,signerAddress,relayer:env.ISSUER_ADDRESS,balanceETH:formatEther(await chain.provider.getBalance(env.ISSUER_ADDRESS)),superAdminOnChain:await chain.admin(wallet)});
  }
- const moderate=path.match(/^\/api\/admin\/events\/(\d+)$/);
+ const moderate=path.match(/^\/api\/(admin|organizer)\/events\/(\d+)$/);
  if(moderate&&post) {
-  const wallet=await user(request,env);if(!admin(wallet))throw new HttpError(403,'Super admin only');
-  const id=idSchema.parse(moderate[1]),listing=await owner(id,wallet);
+  const wallet=await user(request,env),namespace=moderate[1];
+  if(namespace==='admin'&&!admin(wallet))throw new HttpError(403,'Super admin only');
+  const id=idSchema.parse(moderate[2]),listing=await owner(id,wallet);
+  if(namespace==='organizer'&&listing.organizer.toLowerCase()!==wallet.toLowerCase())throw new HttpError(403,'Only the event creator can edit or delete this event');
+  if(listing.deleted_at)throw new HttpError(409,'This event has been deleted');
   const input=z.discriminatedUnion('action',[
+   z.object({action:z.literal('delete')}).strict(),
    z.object({action:z.literal('verify')}).strict(),
    z.object({action:z.literal('reject'),reason:z.string().trim().min(1).max(1000)}).strict(),
    z.object({action:z.enum(['pause','resume'])}).strict(),
    z.object({action:z.literal('edit'),title:z.string().trim().min(3).max(100),description:z.string().trim().min(3).max(1000),venue:z.string().trim().min(2).max(300),category:z.enum(categories),club:z.string().trim().min(2).max(80).optional(),campus:z.string().trim().max(100).optional(),eventStartsAt:z.number().int().positive().optional(),eventEndsAt:z.number().int().positive().optional(),approximateAttendees:z.number().int().min(1).max(100000).optional()}).strict()
   ]).parse(await body(request));
+  if(namespace==='organizer'&&!['edit','delete'].includes(input.action))throw new HttpError(403,'Creators can edit or delete their own listings; mint moderation is superadmin-only');
+  if(input.action==='delete'&&namespace!=='organizer')throw new HttpError(400,'Delete events through the creator endpoint');
   const event=await env.DB.prepare('SELECT group_id FROM events WHERE id=?').bind(id).first();
   const affected=await env.DB.prepare('SELECT id,listed FROM events WHERE id=? OR (group_id IS NOT NULL AND group_id=?)').bind(id,event.group_id).all();
   const ids=affected.results.map(row=>row.id),writes=[];
-  if(input.action==='edit') {
+  const deletion=input.action==='delete',chainAction=['pause','resume','reject'].includes(input.action)||(deletion&&listing.ends_at>=now());
+  if(deletion) {
+   const timestamp=now();
+   for(const target of ids)writes.push(
+    env.DB.prepare('UPDATE events SET listed=0,paused=1,deleted_at=? WHERE id=?').bind(timestamp,target),
+    env.DB.prepare("UPDATE jobs SET status='failed',error='Event deleted by its creator',updated_at=? WHERE id IN (SELECT id FROM claims WHERE event_id=?) AND status='pending' AND raw_tx IS NULL").bind(timestamp,target),
+    env.DB.prepare("UPDATE links SET revoked_at=COALESCE(revoked_at,?) WHERE event_id=? AND state!='minted'").bind(timestamp,target),
+    env.DB.prepare("UPDATE poap_requests SET status='rejected' WHERE event_id=? AND status='pending'").bind(target)
+   );
+   if(chainAction)writes.push(env.DB.prepare("INSERT INTO chain_actions(id,wallet,kind,payload,created_at) VALUES(?,?,'pause',?,?)").bind(crypto.randomUUID(),wallet,JSON.stringify({ids,paused:true}),timestamp));
+  }
+  else if(input.action==='edit') {
    const start=input.eventStartsAt??listing.event_starts_at??listing.starts_at,end=input.eventEndsAt??listing.event_ends_at??listing.ends_at;
    if(start>=end)throw new HttpError(400,'Event start must be before its end');
    for(const target of ids)writes.push(env.DB.prepare('UPDATE events SET title=?,description=?,venue=?,category=?,club=?,campus=?,event_starts_at=?,event_ends_at=?,approximate_attendees=? WHERE id=?').bind(input.title,input.description,input.venue,input.category,input.club??listing.club,input.campus??listing.campus,start,end,input.approximateAttendees??listing.approximate_attendees,target));
@@ -116,8 +133,8 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   }
   writes.push(audit(wallet,id,input.action,{...input,affectedIds:ids}));
   await env.DB.batch(writes);
-  const action=['pause','resume','reject'].includes(input.action);
-  if(action)await wake();return json({status:action?'pending':'saved'},action?202:200);
+  if(chainAction)await wake();
+  return json(deletion?{status:'deleted',pauseStatus:chainAction?'pending':null}:{status:chainAction?'pending':'saved'},chainAction?202:200);
  }
  const qr=path.match(/^\/api\/events\/(\d+)\/qr$/);
  if(qr&&request.method==='GET') {
@@ -135,6 +152,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
    return json({rows:results.slice(0,100),hasMore:results.length>100});
   }
   if(post) {
+   if(event.deleted_at)throw new HttpError(409,'This event has been deleted');
    const input=z.object({recipients:z.array(z.object({email:z.string().trim().toLowerCase().pipe(z.email().max(254)),role:z.string().trim().min(1).max(40)})).max(500).optional(),csv:z.string().max(150000).optional()}).strict().parse(await body(request,160000));
    let rows=input.recipients;
    if(!rows) {try {rows=parseRecipients(input.csv||'');}catch(error){throw new HttpError(400,error.message);}}
@@ -162,7 +180,8 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  const linkAction=path.match(/^\/api\/links\/([a-f0-9-]{36})\/(revoke|regenerate|delete-email)$/);
  if(linkAction&&post) {
   const wallet=await user(request,env),link=await env.DB.prepare('SELECT * FROM links WHERE id=?').bind(linkAction[1]).first();
-  if(!link)throw new HttpError(404,'Link not found');await owner(link.event_id,wallet);
+  if(!link)throw new HttpError(404,'Link not found');const event=await owner(link.event_id,wallet);
+  if(event.deleted_at&&linkAction[2]==='regenerate')throw new HttpError(409,'This event has been deleted');
   if(linkAction[2]==='delete-email') {await env.DB.batch([env.DB.prepare('UPDATE links SET email=NULL WHERE id=?').bind(link.id),...(admin(wallet)?[audit(wallet,link.event_id,'delete-email',{linkId:link.id})]:[])]);return json({deleted:true});}
   if(link.state!=='issued')throw new HttpError(409,'A claiming or minted link cannot be changed');
   const token=randomToken();
@@ -183,7 +202,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  }
  if(path==='/api/my/requests'&&request.method==='GET') {
   const wallet=await user(request,env),page=z.coerce.number().int().min(0).parse(url.searchParams.get('page')||0);
-  const {results}=await env.DB.prepare(`SELECT r.*,e.title,e.roles,j.status AS mint_status,j.token_id,j.tx_hash,j.error FROM poap_requests r JOIN events e ON e.id=r.event_id LEFT JOIN jobs j ON j.id=r.claim_id WHERE r.wallet=? COLLATE NOCASE ORDER BY r.created_at DESC,r.id LIMIT 51 OFFSET ?`).bind(wallet,page*50).all();
+  const {results}=await env.DB.prepare(`SELECT r.*,e.title,e.roles,j.status AS mint_status,j.token_id,j.tx_hash,COALESCE(j.error,CASE WHEN e.deleted_at IS NOT NULL THEN 'Event listing deleted by its creator' END) AS error FROM poap_requests r JOIN events e ON e.id=r.event_id LEFT JOIN jobs j ON j.id=r.claim_id WHERE r.wallet=? COLLATE NOCASE ORDER BY r.created_at DESC,r.id LIMIT 51 OFFSET ?`).bind(wallet,page*50).all();
   return json({rows:results.slice(0,50).map(row=>({...row,role:JSON.parse(row.roles)[0],roles:undefined})),hasMore:results.length>50});
  }
  const requests=path.match(/^\/api\/events\/(\d+)\/requests$/);

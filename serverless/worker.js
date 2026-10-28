@@ -56,6 +56,7 @@ function eventRecord(row) {
     campus: row.campus || '', roles: JSON.parse(row.roles || '["Attendee"]'),
     venue: row.venue, image: row.image, uri: row.uri, animationUrl: row.animation_url || null, startsAt: row.event_starts_at ?? row.starts_at, endsAt: row.event_ends_at ?? row.ends_at,
     mintStartsAt: row.starts_at, mintEndsAt: row.ends_at, dropId: row.id,
+    deleted:Boolean(row.deleted_at),status:row.deleted_at?'deleted':row.listed===0?'rejected':row.paused?'paused':(row.event_ends_at??row.ends_at)<now()?'past':(row.event_starts_at??row.starts_at)>now()?'upcoming':'live',
     approximateAttendees:row.approximate_attendees, verified:Boolean(row.verified), paused:Boolean(row.paused), listed:Boolean(row.listed), cap:row.cap, organizer:row.organizer };
 }
 
@@ -97,7 +98,7 @@ export function createHandler(chainFactory = connectChain) {
         const id = crypto.randomUUID();
         const site = ['localhost','127.0.0.1','[::1]'].includes(url.hostname) ? url.origin : env.SITE_ORIGIN || url.origin;
         const input = z.object({ wallet: address }).parse(await body(request));
-        const message = `${new URL(site).host} wants you to sign in with your Ethereum account:\n${input.wallet}\n\nSign in to Kairo. No gas payment or token approval.\n\nURI: ${site}\nVersion: 1\nChain ID: 11155111\nNonce: ${id.replaceAll('-', '')}\nIssued At: ${new Date().toISOString()}\nExpiration Time: ${new Date((now()+600)*1000).toISOString()}`;
+        const message = `${new URL(site).host} wants you to sign in with your Ethereum account:\n${input.wallet}\n\nSign in to Kairo.\n\nURI: ${site}\nVersion: 1\nChain ID: 11155111\nNonce: ${id.replaceAll('-', '')}\nIssued At: ${new Date().toISOString()}\nExpiration Time: ${new Date((now()+600)*1000).toISOString()}`;
         await env.DB.prepare('INSERT INTO challenges VALUES(?,?,?)').bind(id, message, now() + 600).run();
         return json({ id, message });
       }

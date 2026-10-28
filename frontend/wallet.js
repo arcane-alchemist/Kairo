@@ -61,9 +61,11 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
           mobile ||= await loadMobileWallet();
           ({accounts} = await mobile.connect()); approved = {...entry, provider:mobile.provider};
         } else {
-          try { await request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]}); }
+          let permissionGranted = false;
+          try { await request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]}); permissionGranted = true; }
           catch (error) { if (![4200,-32601].includes(error.code)) throw error; }
-          accounts = await request({method:'eth_requestAccounts'});
+          accounts = await request({method:permissionGranted?'eth_accounts':'eth_requestAccounts'});
+          if(permissionGranted&&!accounts.length)accounts = await request({method:'eth_requestAccounts'});
         }
         if (Array.isArray(accounts)&&accounts.length>1) {
           try {await request({method:'wallet_revokePermissions',params:[{eth_accounts:{}}]});}catch{/* The connection stays detached if revocation is unsupported. */}

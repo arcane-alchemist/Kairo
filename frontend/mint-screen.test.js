@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import {hexlify,toUtf8Bytes} from 'ethers';
 const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const showTicket = source.slice(source.indexOf('async function showTicket('), source.indexOf('\nfunction walletHeader()'));
 test('QR claims show only pending status until confirmation, then the minted artwork', async () => {
@@ -55,16 +56,16 @@ test('an explicitly connected authenticated wallet shows Mint without another si
   assert.match(main.innerHTML,/id="claim-connect"[^>]*hidden/);
 });
 test('wallet connects and switches to Sepolia before requesting the sign-in signature', async () => {
-  const steps=[];const signer={getAddress:async()=> '0xwallet',signMessage:async()=>{steps.push('sign');return 'signature';}};
+  const steps=[];const signer={getAddress:async()=> '0xwallet'};
   class Provider {async send(){steps.push('accounts');}async getSigner(){return signer;}}
-  let chain='0x1';const injected={request:async({method})=>{steps.push(method);if(method==='wallet_switchEthereumChain')chain='0xaa36a7';return method==='eth_chainId'?chain:method==='eth_accounts'?['0xwallet']:null;}};
-  const context=vm.createContext({BrowserProvider:Provider,connectedWallet:'0xwallet',walletRevision:0,signInRequest:Promise.resolve(),logoutRequest:Promise.resolve(),walletClient:{provider:injected},
+  let chain='0x1';const injected={request:async({method,params})=>{steps.push(method);if(method==='wallet_switchEthereumChain')chain='0xaa36a7';if(method==='personal_sign'){assert.equal(params[0],hexlify(toUtf8Bytes('Sign in')));assert.equal(params[1],'0xwallet');return 'signature';}return method==='eth_chainId'?chain:method==='eth_accounts'?['0xwallet']:null;}};
+  const context=vm.createContext({BrowserProvider:Provider,hexlify,toUtf8Bytes,connectedWallet:'0xwallet',walletRevision:0,signInRequest:Promise.resolve(),logoutRequest:Promise.resolve(),walletClient:{provider:injected},
     config:{chainId:11155111,chainName:'Sepolia'},chainHex:()=> '0xaa36a7',connectWallet:async()=>{},walletHeader(){},updateNetwork:async()=>{context.activeChain=await injected.request({method:'eth_chainId'});},
     post:async(path)=>{steps.push(path);return {message:'Sign in'};},api:async()=>({wallet:'0xwallet'}),document:{querySelector:()=>({})},short:String,toast(){},session:null});
   const start=source.indexOf('async function connect(accountChanged = false)');
   await vm.runInContext(source.slice(source.indexOf('async function switchNetwork()'),source.indexOf('function headerConnect()'))+source.slice(start,source.indexOf("\ndocument.querySelector('#wallet').onclick",start))+'\nconnect()',context);
-  assert(steps.indexOf('wallet_switchEthereumChain')<steps.indexOf('sign'));
-  assert(steps.indexOf('sign')<steps.indexOf('/auth/verify'));
+  assert(steps.indexOf('wallet_switchEthereumChain')<steps.indexOf('personal_sign'));
+  assert(steps.indexOf('personal_sign')<steps.indexOf('/auth/verify'));
 });
 test('a late mint response cannot replace a newer ticket screen', async () => {
   let resolveFirst,requests=0;const node={};

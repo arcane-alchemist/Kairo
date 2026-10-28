@@ -4,6 +4,11 @@ export async function actionNext(db,chain) {
  if(!action)return false;
  try {
   if(!action.raw_tx) {
+   const payload=JSON.parse(action.payload);
+   if(action.kind==='pause'&&!payload.paused) {
+    const deleted=await db.prepare(`SELECT id FROM events WHERE deleted_at IS NOT NULL AND id IN (${payload.ids.map(()=>'?').join(',')}) LIMIT 1`).bind(...payload.ids).first();
+    if(deleted){await db.prepare("UPDATE chain_actions SET status='failed',error='Deleted events cannot resume',updated_at=? WHERE id=?").bind(now(),action.id).run();return true;}
+   }
    const signed=await chain.signAction(action);
    await db.batch([
     db.prepare("UPDATE chain_actions SET raw_tx=?,tx_hash=?,status='submitted',updated_at=? WHERE id=?").bind(signed.raw,signed.hash,now(),action.id),

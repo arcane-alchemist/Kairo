@@ -387,3 +387,108 @@ test('a participant can read their confirmed request token ID without admin acce
  const mine=await(await f.request('/my/requests',undefined,participant)).json();assert.equal(mine.rows[0].token_id,'77');assert.equal(mine.rows[0].mint_status,'confirmed');
  assert.equal((await(await f.request('/my/requests',undefined,await f.login(f.outsider))).json()).rows.length,0);
 });
+
+test('the creator edits every role after publication while frozen mint data stays unchanged',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const first=f.sqlite.prepare('SELECT * FROM events').get();
+ const second={...first,id:2,roles:'["Speaker"]',group_id:'shared'};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));f.sqlite.exec("UPDATE events SET group_id='shared' WHERE id=1");
+ const creator=await f.login(f.organizer),admin=await f.login(f.admin),other=await f.login(f.outsider);
+ const edit={action:'edit',title:'Creator update',description:'New listing details',venue:'Hall B',category:'Workshop',club:'New club',campus:'North',eventStartsAt:f.seconds-100,eventEndsAt:f.seconds-1,approximateAttendees:20};
+ assert.equal((await f.request('/organizer/events/1',edit,other)).status,403);
+ assert.equal((await f.request('/organizer/events/1',edit,admin)).status,403);
+ assert.equal((await f.request('/organizer/events/1',{action:'pause'},creator)).status,403);
+ assert.equal((await f.request('/organizer/events/1',{...edit,mintEndsAt:f.seconds+100},creator)).status,400);
+ assert.equal((await f.request('/organizer/events/1',edit,creator)).status,200);
+ for(const row of f.sqlite.prepare('SELECT * FROM events ORDER BY id').all()){
+  assert.equal(row.title,edit.title);assert.equal(row.event_ends_at,edit.eventEndsAt);assert.equal(row.venue,'Hall B');
+  assert.equal(row.ends_at,first.ends_at);assert.equal(row.uri,first.uri);assert.equal(row.image,first.image);assert.equal(row.cap,first.cap);
+ }
+ const publicEvents=await(await f.request('/events')).json();assert.equal(publicEvents.length,2);assert(publicEvents.every(event=>event.status==='past'));
+});
+
+test('mint expiry leaves an event in Past events and blocks every new claim path',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const creator=await f.login(f.organizer),admin=await f.login(f.admin),participant=await f.login(f.participant);
+ const link=await issue(f,creator);const qr=await qrToken(f.env.QR_HMAC_SECRET,1);
+ f.chain.event=async()=>({cap:2n,minted:0n,startsAt:BigInt(f.seconds-10),endsAt:BigInt(f.seconds-1),paused:false});
+ f.sqlite.prepare('UPDATE events SET ends_at=?,event_ends_at=? WHERE id=1').run(f.seconds-1,f.seconds-1);
+ const past=await(await f.request('/events')).json();assert.equal(past[0].status,'past');assert.equal(past.length,1);
+ for(const [path,data,cookie] of [
+  ['/events/1/qr',undefined,creator],['/events/1/requests',{permanentConsent:true},participant],
+  ['/admin/events/1/mint',{wallet:f.participant.address},admin],
+  ['/events/1/claim',{permanentConsent:true,qr},participant],
+  ['/redeem/claim',{permanentConsent:true,token:tokenOf(link)},participant]
+ ])assert.equal((await f.request(path,data,cookie)).status,409,path);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,0);
+});
+
+test('creator deletion removes grouped listing and claims while retaining submitted and confirmed history',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const first=f.sqlite.prepare('SELECT * FROM events').get();
+ const second={...first,id:2,roles:'["Speaker"]',group_id:'shared'};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));f.sqlite.exec("UPDATE events SET group_id='shared' WHERE id=1");
+ const creator=await f.login(f.organizer),admin=await f.login(f.admin),participant=await f.login(f.participant),outsider=await f.login(f.outsider);
+ const link=await issue(f,creator),wanted=await(await f.request('/events/2/requests',{permanentConsent:true},participant)).json();
+ await f.request('/admin/events/1/mint',{wallet:f.outsider.address},admin);
+ const pending=f.sqlite.prepare("SELECT id FROM jobs WHERE status='pending'").get();
+ f.sqlite.prepare("INSERT INTO claims(id,event_id,wallet,method,created_at) VALUES(?,?,?,?,?)").run('confirmed',2,f.outsider.address,'ADMIN',f.seconds);
+ f.sqlite.prepare("INSERT INTO jobs(id,status,token_id,created_at) VALUES('confirmed','confirmed','77',?)").run(f.seconds);
+ f.sqlite.prepare("INSERT INTO claims(id,event_id,wallet,method,created_at) VALUES(?,?,?,?,?)").run('submitted',2,f.admin.address,'ADMIN',f.seconds);
+ f.sqlite.prepare("INSERT INTO jobs(id,status,raw_tx,tx_hash,created_at) VALUES('submitted','submitted','signed','0xsigned',?)").run(f.seconds);
+ assert.equal((await f.request('/organizer/events/1',{action:'delete'},outsider)).status,403);
+ assert.equal((await f.request('/admin/events/1',{action:'delete'},admin)).status,400);
+ assert.equal((await f.request('/organizer/events/1',{action:'delete'},creator)).status,202);
+ assert.equal((await(await f.request('/events')).json()).length,0);
+ assert.equal((await f.request('/events/1')).status,404);
+ assert.equal((await(await f.request('/organizer/events',undefined,creator)).json()).events.length,0);
+ const deleted=(await(await f.request('/admin/events',undefined,admin)).json()).events;assert(deleted.every(event=>event.deleted&&event.status==='deleted'));
+ assert(f.sqlite.prepare('SELECT * FROM events').all().every(event=>event.deleted_at&&event.paused&&!event.listed));
+ assert.equal(f.sqlite.prepare('SELECT status FROM jobs WHERE id=?').get(pending.id).status,'failed');
+ assert.equal(f.sqlite.prepare("SELECT status FROM jobs WHERE id='confirmed'").get().status,'confirmed');
+ assert.equal(f.sqlite.prepare("SELECT status,raw_tx FROM jobs WHERE id='submitted'").get().raw_tx,'signed');
+ assert.equal(f.sqlite.prepare('SELECT status FROM poap_requests WHERE id=?').get(wanted.id).status,'rejected');
+ assert(f.sqlite.prepare('SELECT revoked_at FROM links WHERE id=?').get(link.id).revoked_at);
+ for(const [path,data,cookie] of [
+  ['/organizer/events/1',{action:'edit',title:'No',description:'No',venue:'No',category:'Workshop'},creator],
+  ['/admin/events/1',{action:'resume'},admin],['/admin/events/1/mint',{wallet:f.participant.address},admin],
+  ['/events/2/requests',{permanentConsent:true},outsider],['/redeem/claim',{permanentConsent:true,token:tokenOf(link)},participant],
+  ['/events/1/links',{recipients:[{email:'again@example.org',role:'Attendee'}]},creator]
+ ])assert.equal((await f.request(path,data,cookie)).status,409,path);
+ assert.equal(f.sqlite.prepare("SELECT kind,payload FROM chain_actions WHERE kind='pause'").all().length,1);
+ assert.deepEqual(f.sqlite.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+test('deletion while signing cancels unsigned mint without broadcasting',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),creator=await f.login(f.organizer);
+ await f.request('/admin/events/1/mint',{wallet:f.participant.address},admin);
+ let broadcast=0;
+ f.chain.signMint=async()=>{assert.equal((await f.request('/organizer/events/1',{action:'delete'},creator)).status,202);return {raw:'signed',hash:'0xmint'};};
+ f.chain.broadcast=async()=>{broadcast++;};
+ await mintNext(f.DB,f.chain);
+ assert.equal(broadcast,0);assert.equal(f.sqlite.prepare('SELECT status,raw_tx FROM jobs').get().status,'failed');
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mint_transactions').get().n,0);
+});
+
+test('a cancelled member prevents an in-flight batch from submitting any member',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const first=f.sqlite.prepare('SELECT * FROM events').get(),second={...first,id:2};
+ f.sqlite.prepare(`INSERT INTO events(${Object.keys(second).join(',')}) VALUES(${Object.keys(second).map(()=>'?').join(',')})`).run(...Object.values(second));
+ const admin=await f.login(f.admin),creator=await f.login(f.organizer);
+ await f.request('/admin/events/1/mint',{wallet:f.participant.address},admin);
+ await f.request('/admin/events/2/mint',{wallet:f.outsider.address},admin);
+ let broadcasts=0;
+ f.chain.signMintBatch=async jobs=>{assert.equal(jobs.length,2);assert.equal((await f.request('/organizer/events/1',{action:'delete'},creator)).status,202);return {raw:'batch',hash:'0xbatch'};};
+ f.chain.broadcast=async()=>{broadcasts++;};
+ await mintNext(f.DB,f.chain);
+ assert.equal(broadcasts,0);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mint_transactions').get().n,0);
+ assert.deepEqual(f.sqlite.prepare('SELECT status FROM jobs ORDER BY status').all().map(row=>row.status),['failed','pending']);
+});
+
+test('an unsigned resume queued before deletion cannot reopen the event',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const admin=await f.login(f.admin),creator=await f.login(f.organizer);
+ await f.request('/admin/events/1',{action:'resume'},admin);
+ f.sqlite.exec("UPDATE chain_actions SET created_at=created_at-1 WHERE kind='pause'");
+ assert.equal((await f.request('/organizer/events/1',{action:'delete'},creator)).status,202);
+ let signed=0;f.chain.signAction=async()=>{signed++;return {raw:'pause',hash:'0xpause'};};
+ await actionNext(f.DB,f.chain);
+ assert.equal(f.sqlite.prepare("SELECT status FROM chain_actions WHERE payload LIKE '%false%'").get().status,'failed');
+ assert.equal(signed,0);
+ await actionNext(f.DB,f.chain);assert.equal(signed,1);
+});

@@ -49,7 +49,7 @@ export async function health(request, env, connectChain) {
   await Promise.all([
     probe('config', () => checkConfig(env)),
     probe('d1', async () => {
-      await env.DB.prepare('SELECT e.listed,e.paused,c.method FROM events e LEFT JOIN claims c ON e.id=c.event_id LIMIT 0').all();
+      await env.DB.prepare('SELECT e.listed,e.paused,e.deleted_at,c.method FROM events e LEFT JOIN claims c ON e.id=c.event_id LIMIT 0').all();
       await env.DB.prepare('SELECT id FROM chain_actions LIMIT 0').all();
       await env.DB.prepare('SELECT token_hash,state FROM links LIMIT 0').all();
       await env.DB.prepare('SELECT id,status,claim_id FROM poap_requests LIMIT 0').all();

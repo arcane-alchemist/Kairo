@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {parseHTML} from 'linkedom';
 import {mountNative,downloadQR} from './native.js';
-import {getAddress,ZeroAddress} from 'ethers';
+import {getAddress,ZeroAddress,hexlify,toUtf8Bytes} from 'ethers';
 import {createApiClient as realApiClient} from './api.js';
 import {csv} from '../serverless/claims.js';
 import {ABI} from '../serverless/chain.js';
@@ -23,7 +23,7 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    QRCode:{toCanvas:async()=>{}}, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    QRCode:{toCanvas:async()=>{}}, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -83,7 +83,27 @@ test('header connection completes SIWE once, and page navigation shares the acco
  assert.equal(ui.document.querySelector('#modal').open,false);assert.match(ui.document.querySelector('#wallet').textContent,/0x1111/);
  assert.equal(ui.requests.filter(([path])=>path==='/api/auth/verify').length,1);
  ui.location.hash='#organize';await ui.render();assert.equal(ui.document.querySelector('#studio-connect'),null);assert.match(ui.document.querySelector('#live-app').textContent,/publish with sponsored gas/);
- assert.equal(calls.filter(method=>method==='eth_requestAccounts').length,1);
+ assert.equal(calls.filter(method=>method==='eth_requestAccounts').length,0);
+});
+test('MetaMask spam block shows a safe sign-in error and a manual retry reuses approved account access',async()=>{
+ const address='0x1111111111111111111111111111111111111111',methods=[];let blocked=true,authenticated=false;
+ const ui=await setup({ethereum:{isMetaMask:true,request:async({method})=>{
+  methods.push(method);
+  if(method==='personal_sign'){if(blocked)throw {code:'UNKNOWN_ERROR',error:{code:4100,message:'Request blocked due to spam filter.'}};return '0xsigned';}
+  return ['eth_accounts','eth_requestAccounts'].includes(method)?[address]:'0xaa36a7';
+ }},respond:path=>{
+  if(path==='/api/auth/challenge')return {id:'challenge',message:'Sign in to Kairo'};
+  if(path==='/api/auth/verify'){authenticated=true;return {wallet:address};}
+  if(path==='/api/auth/me')return authenticated?{wallet:address,admin:false}:new Response('{}',{status:401});
+ }});
+ await ui.document.querySelector('#wallet').onclick();
+ assert.match(ui.document.querySelector('#request-error').textContent,/MetaMask blocked the sign-in request as spam/);
+ assert.doesNotMatch(ui.document.querySelector('#request-error').textContent,/could not coalesce|personal_sign|payload/);
+ assert.equal(ui.requests.some(([path])=>path==='/api/auth/verify'),false);
+ assert.equal(ui.document.querySelector('#wallet').textContent,'Connect wallet');
+ blocked=false;await ui.document.querySelector('#wallet').onclick();
+ assert.equal(authenticated,true);assert.equal(methods.filter(method=>method==='wallet_requestPermissions').length,1);
+ assert.equal(methods.filter(method=>method==='personal_sign').length,2);
 });
 test('a reload restores the signed session UI without calling a wallet extension',async()=>{
  const calls=[],address='0x1111111111111111111111111111111111111111';
@@ -139,7 +159,7 @@ test('extension account changes require a fresh SIWE while chain changes show a 
  }});
  const pending=ui.document.querySelector('#wallet').onclick();await pending;
  account=second;await listeners.get('accountsChanged')([second]);assert.match(ui.document.querySelector('#wallet').textContent,/0x2222/);
- assert.equal(ui.requests.filter(([path])=>path==='/api/auth/verify').length,2);assert.equal(calls.filter(method=>method==='eth_requestAccounts').length,1);
+ assert.equal(ui.requests.filter(([path])=>path==='/api/auth/verify').length,2);assert.equal(calls.filter(method=>method==='eth_requestAccounts').length,0);
  chain='0x1';await listeners.get('chainChanged')(chain);assert.equal(ui.document.querySelector('#connection-state').hidden,false);assert.match(ui.document.querySelector('#wallet-network').textContent,/Switch to Sepolia/);
  const network=ui.document.querySelector('#wallet-network');await network.onclick({target:network});assert.equal(network.textContent,'Sepolia');assert.equal(ui.document.querySelector('#connection-state').hidden,true);
 });
@@ -248,24 +268,38 @@ test('any signed-in organizer directly publishes distinct generated roles and re
  assert.equal(ui.location.hash,'issuer/manage/7');assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);
 });
 
-test('the empty admin studio has a readable system panel and no useless pagination',async()=>{
+test('superadmin Activity is separate from request review and shows gas, network and audit',async()=>{
  const wallet='0x1111111111111111111111111111111111111111';
- const ui=await setup({hash:'#admin',respond:path=>{
+ const ui=await setup({hash:'#admin/activity',respond:path=>{
   if(path==='/api/auth/me')return {wallet,admin:true};
   if(path==='/api/admin/system')return {relayer:wallet,signerAddress:wallet,balanceETH:'0.599993',superAdminOnChain:true,actions:[]};
   if(path==='/api/health')return {status:'ok',dependencies:{config:{status:'ok'},rpc:{status:'ok'},contract:{status:'ok'},relayer:{status:'ok'}}};
   if(path==='/api/admin/audit')return {rows:[],hasMore:false};
  }});
- assert(ui.document.querySelector('.studio-layout.with-admin'));
+ assert(ui.document.querySelector('#studio-system'));
+ assert.equal(ui.document.querySelector('#studio-events'),null);
+ assert(ui.document.querySelector('a[href="#admin"]'));
  assert.equal(ui.document.querySelectorAll('.page-controls').length,0);
  assert.match(ui.document.querySelector('.relayer-balance').textContent,/0\.599993/);
  assert.match(ui.document.querySelector('.activity-panel').textContent,/No admin actions yet/);
  assert.doesNotMatch(ui.document.querySelector('#live-app').textContent,/Previous eventsNext events|config: ok|d1: ok|Previous actionsNext actions/);
  assert.match(ui.document.querySelector('.service-badge.is-ready').textContent,/Ready/);
 });
+test('superadmin Review requests panel lists event requests without loading Activity',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',now=Math.floor(Date.now()/1000);
+ const ui=await setup({hash:'#admin',respond:path=>{
+  if(path==='/api/auth/me')return {wallet,admin:true};
+  if(path==='/api/admin/events?page=0')return {events:[{id:7,title:'Campus workshop',organizer:wallet,roles:['Attendee'],listed:true,startsAt:now-60,endsAt:now+3600,mintStartsAt:now-60,mintEndsAt:now+3600,pendingRequests:2}],publications:[]};
+ }});
+ assert(ui.document.querySelector('#studio-events'));assert.equal(ui.document.querySelector('#studio-system'),null);
+ assert.match(ui.document.querySelector('#studio-events').textContent,/2 pending POAP requests/);
+ assert.equal(ui.document.querySelector('.studio-event-actions a').getAttribute('href'),'#admin/events/7');
+ assert(ui.document.querySelector('a[href="#admin/activity"]'));
+ assert.equal(ui.requests.some(([path])=>path==='/api/admin/system'||path==='/api/admin/audit'),false);
+});
 test('contract setup problems remain visible while network connectivity is shown separately',async()=>{
  const wallet='0x1111111111111111111111111111111111111111';
- const ui=await setup({hash:'#admin',respond:path=>{
+ const ui=await setup({hash:'#admin/activity',respond:path=>{
   if(path==='/api/auth/me')return {wallet,admin:true};
   if(path==='/api/admin/system')return {relayer:wallet,signerAddress:wallet,balanceETH:'0.6',superAdminOnChain:true,actions:[]};
   if(path==='/api/health')return {status:'degraded',dependencies:{rpc:{status:'ok'},contract:{status:'error',code:'CONTRACT_MISMATCH',message:'Deploy the updated Kairo contract.'},relayer:{status:'ok'}}};
@@ -274,7 +308,7 @@ test('contract setup problems remain visible while network connectivity is shown
  assert.match(ui.document.querySelector('.setup-note').textContent,/Connect the updated contract/);
  assert.match(ui.document.querySelector('.service-details').textContent,/Sepolia connectionAvailable/);
  assert.equal(ui.document.querySelector('#request-error').hidden,true);
- assert.doesNotMatch(ui.document.querySelector('#studio-events').textContent,/contract|error/i);
+ assert.equal(ui.document.querySelector('#studio-events'),null);
 });
 test('studio pagination appears only when another events page exists',async()=>{
  const ui=await setup({hash:'#issuer/studio',respond:path=>{
@@ -357,6 +391,46 @@ test('a published organizer event exposes rotating QR and single-use links with 
  event.paused=true;await ui.render();assert.equal(ui.document.querySelector('#walk-in').disabled,true);
 });
 
+test('event creator can edit and delete a published event from their workspace',async()=>{
+ const now=Math.floor(Date.now()/1000),address='0x1111111111111111111111111111111111111111';
+ const event={id:7,title:'Campus workshop',description:'A coding workshop',club:'Code club',campus:'Main',category:'Technology',venue:'Hall A',organizer:address,roles:['Attendee'],listed:true,paused:false,startsAt:now-60,endsAt:now+3600,mintStartsAt:now-60,mintEndsAt:now+3600,approximateAttendees:10};
+ const ui=await setup({hash:'#issuer/manage/7',respond:(path,options)=>{
+  if(path==='/api/auth/me')return {wallet:address,admin:false};
+  if(path==='/api/organizer/events?page=0')return {events:[event],publications:[]};
+  if(path==='/api/events')return event.deleted?[]:[event];
+  if(path==='/api/events/7/dashboard')return {event,capRemaining:10};
+  if(path.startsWith('/api/events/7/transactions')||path.startsWith('/api/events/7/links'))return {rows:[],hasMore:false};
+  if(path==='/api/organizer/events/7'&&options?.method==='POST'){
+   const body=JSON.parse(options.body);if(body.action==='delete')event.deleted=true;else Object.assign(event,body);return {status:body.action==='delete'?'deleted':'saved'};
+  }
+ }});
+ const edit=ui.document.querySelector('#edit-event'),del=ui.document.querySelector('#delete-event');
+ assert(edit);assert(del);assert.equal(ui.document.querySelector('#direct-mint'),null);
+ edit.elements.title.value='Creator revised event';edit.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ const editCall=ui.requests.find(([path,options])=>path==='/api/organizer/events/7'&&JSON.parse(options.body).action==='edit');
+ assert.equal(JSON.parse(editCall[1].body).title,'Creator revised event');assert.equal(JSON.parse(editCall[1].body).mintEndsAt,undefined);
+ del.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(ui.requests.filter(([path,options])=>path==='/api/organizer/events/7'&&JSON.parse(options.body).action==='delete').length,0);
+ del.querySelector('input').checked=true;del.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(event.deleted,true);assert.equal(ui.location.hash,'#issuer/studio');
+});
+
+test('ended events appear as Past in the organizer studio and remain in public discovery',async()=>{
+ const now=Math.floor(Date.now()/1000),address='0x1111111111111111111111111111111111111111';
+ const event={id:7,title:'Past workshop',description:'A coding workshop',club:'Code club',category:'Technology',venue:'Hall A',organizer:address,roles:['Attendee'],listed:true,paused:false,startsAt:now-7200,endsAt:now-3600,mintStartsAt:now-7200,mintEndsAt:now-3600};
+ const respond=path=>path==='/api/auth/me'?{wallet:address,admin:false}:path==='/api/organizer/events?page=0'?{events:[event],publications:[]}:undefined;
+ const studio=await setup({hash:'#issuer/studio',events:[event],respond});
+ assert.match(studio.document.querySelector('#studio-events').textContent,/Past event/);
+ assert.match(studio.document.querySelector('#studio-events').textContent,/Minting closed/);
+ const discovery=await setup({hash:'#events',events:[event],respond});
+ assert.match(discovery.document.querySelector('#live-app').textContent,/Past workshop/);
+ assert.match(discovery.document.querySelector('#live-app').textContent,/Minting closed/);
+ discovery.location.hash='#drop/7';await discovery.render();
+ const dialog=discovery.document.querySelector('#modal');
+ assert.match(dialog.textContent,/Minting has closed for this event/);
+ assert.equal(dialog.querySelector('#poap-request button').disabled,true);
+});
+
 test('superadmin dashboard submits recipient mints and accepts or rejects individual POAP requests',async()=>{
  const now=Math.floor(Date.now()/1000),address='0x1111111111111111111111111111111111111111',requestId=crypto.randomUUID();
  const event={id:7,title:'Campus workshop',description:'A coding workshop',roles:['Attendee'],listed:true,paused:false,mintStartsAt:now-60,mintEndsAt:now+3600};
@@ -396,16 +470,17 @@ test('event details submit a consented request for the signed wallet and show it
  form=ui.document.querySelector('#poap-request');assert.match(form.textContent,/POAP request: rejected/);assert.equal(form.querySelector('button').hidden,true);
 });
 
-test('Gallery refreshes a reviewed request into its confirmed artwork without showing an unminted badge',async()=>{
+test('Gallery contains only minted owned POAPs and refreshes after confirmation',async()=>{
  const address='0x1111111111111111111111111111111111111111';let minted=false;
  const ui=await setup({hash:'#gallery',respond:path=>{
   if(path==='/api/auth/me')return {wallet:address,admin:false};
   if(path.startsWith('/api/my/requests'))return {rows:[{id:'request',event_id:7,title:'Campus workshop',role:'Attendee',status:minted?'accepted':'pending',mint_status:minted?'confirmed':null}],hasMore:false};
   if(path.startsWith('/api/wallet-collection'))return {items:minted?[{id:7,tokenId:'9',title:'Campus workshop',role:'Attendee',image:'https://kairo.test/media/art/badge.png',history:[],ownershipVerified:true}]:[],total:minted?1:0,nextCursor:null,pending:0};
  }});
- await new Promise(resolve=>setImmediate(resolve));assert.match(ui.document.querySelector('#gallery-requests').textContent,/pending/);assert.equal(ui.document.querySelectorAll('.gallery-badge').length,0);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.document.querySelector('#gallery-requests'),null);assert.equal(ui.document.querySelectorAll('.gallery-badge').length,0);
+ assert.equal(ui.requests.some(([path])=>path.startsWith('/api/my/requests')),false);
  minted=true;await ui.intervals[0]();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
- assert.match(ui.document.querySelector('#gallery-requests').textContent,/accepted · confirmed/);assert.equal(ui.document.querySelectorAll('.gallery-badge').length,1);assert.equal(ui.document.querySelector('.gallery-badge img').getAttribute('src'),'https://kairo.test/media/art/badge.png');
+ assert.equal(ui.document.querySelectorAll('.gallery-badge').length,1);assert.equal(ui.document.querySelector('.gallery-badge img').getAttribute('src'),'https://kairo.test/media/art/badge.png');
 });
 
 test('admin background refresh preserves an address being typed and manual refresh reads fresh event state',async()=>{
@@ -437,6 +512,29 @@ test('clearing a saved publication resets the editor and permits a fresh publica
  const generate=ui.document.querySelector('#generate-poap');await generate.onclick({target:generate});
  form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(payloads.length,1);assert.notEqual(payloads[0].id,oldId);assert.equal(payloads[0].title,'New campus workshop');
+});
+
+test('artwork finishing after navigation cannot write into the next page or publish an event',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';let finishArtwork;
+ const ui=await setup({hash:'#create',respond:path=>{
+  if(path==='/api/auth/me')return {wallet,admin:false};
+  if(path==='/api/artwork')return new Promise(resolve=>{finishArtwork=()=>resolve({image:'https://kairo.test/media/art/badge.svg',uri:'https://kairo.test/media/metadata/badge.json'});});
+ }});
+ const form=ui.document.querySelector('#event-form');form.elements.title.value='Campus workshop';form.elements.description.value='A coding workshop';
+ const generation=ui.document.querySelector('#generate-poap').onclick({target:ui.document.querySelector('#generate-poap')});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(typeof finishArtwork,'function');
+ ui.location.hash='#events';await ui.render();finishArtwork();await generation;
+ assert(ui.document.querySelector('#live-events'));assert.equal(ui.document.querySelector('#role-designs'),null);
+ assert.equal(ui.requests.some(([path])=>path==='/api/organizer/events'),false);
+ assert.equal(ui.document.querySelector('#request-error').hidden,true);
+});
+
+test('a detached Gallery refresh cannot write into another page',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';
+ const ui=await setup({hash:'#gallery',respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{items:[],total:0,pending:0,nextCursor:null}:undefined});
+ const form=ui.document.querySelector('#collection-form');const before=ui.requests.filter(([path])=>path.startsWith('/api/wallet-collection')).length;
+ ui.location.hash='#events';await ui.render();form.onsubmit({preventDefault(){}});
+ assert(ui.document.querySelector('#live-events'));assert.equal(ui.requests.filter(([path])=>path.startsWith('/api/wallet-collection')).length,before);
 });
 
 test('a restored superadmin session exposes its profile and the Create destination opens request management',async()=>{

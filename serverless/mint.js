@@ -38,10 +38,16 @@ export async function mintNext(db,chain) {
     // A recipient contract that rejects ERC721s must not fail everyone else's mint.
     batch=[job];signed=await chain.signMint(job.event_id,job.wallet);
    }
-   await db.batch(batch.flatMap(candidate=>[
-    db.prepare("UPDATE jobs SET raw_tx=?,tx_hash=?,status='submitted',updated_at=? WHERE id=?").bind(signed.raw,signed.hash,now(),candidate.id),
-    db.prepare('INSERT OR IGNORE INTO mint_transactions VALUES(?,?,?,?)').bind(signed.hash,candidate.id,signed.raw,now())
-   ]));job.raw_tx=signed.raw;job.tx_hash=signed.hash;
+   const ids=batch.map(candidate=>candidate.id),slots=ids.map(()=>'?').join(',');
+   // Recheck the whole batch atomically: deletion or pause during signing must not revive cancelled jobs.
+   const saved=await db.batch([
+    db.prepare(`UPDATE jobs SET raw_tx=?,tx_hash=?,status='submitted',updated_at=? WHERE id IN (${slots}) AND status='pending' AND raw_tx IS NULL
+     AND (SELECT COUNT(*) FROM jobs j JOIN claims c ON c.id=j.id JOIN events e ON e.id=c.event_id WHERE j.id IN (${slots}) AND j.status='pending' AND j.raw_tx IS NULL AND e.listed=1 AND e.paused=0)=?`)
+     .bind(signed.raw,signed.hash,now(),...ids,...ids,ids.length),
+    ...batch.map(candidate=>db.prepare("INSERT OR IGNORE INTO mint_transactions SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE id=? AND raw_tx=? AND status='submitted')").bind(signed.hash,candidate.id,signed.raw,now(),candidate.id,signed.raw))
+   ]);
+   if(saved[0].meta.changes!==batch.length){await settleLinks(db);return true;}
+   job.raw_tx=signed.raw;job.tx_hash=signed.hash;
   } else batch=(await db.prepare(`SELECT j.*,c.event_id,c.wallet FROM jobs j JOIN claims c ON c.id=j.id WHERE j.raw_tx=? AND j.status='submitted'`).bind(job.raw_tx).all()).results;
   let receipt=await chain.receipt(job.tx_hash);
   if(!receipt) {

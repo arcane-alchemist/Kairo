@@ -4,14 +4,14 @@ import {metaMaskWallet} from './wallet.js';
 const address = '0x1111111111111111111111111111111111111111';
 function provider(extra = {}) {
   const methods = [], listeners = new Map();
-  return {isMetaMask:true, methods, listeners, async request({method}) {methods.push(method); return method === 'eth_requestAccounts' ? [address] : [];}, on(event,fn){listeners.set(event,fn);},removeListener(event){listeners.delete(event);},...extra};
+  return {isMetaMask:true, methods, listeners, async request({method}) {methods.push(method); return ['eth_requestAccounts','eth_accounts'].includes(method) ? [address] : [];}, on(event,fn){listeners.set(event,fn);},removeListener(event){listeners.delete(event);},...extra};
 }
 function win(ethereum) {const target = new EventTarget(); return {ethereum,Event,addEventListener:target.addEventListener.bind(target),dispatchEvent:target.dispatchEvent.bind(target)};}
 test('startup never reads an account and explicit connect requests MetaMask permission first', async () => {
   const mm=provider(), other=provider({isMetaMask:false, isPhantom:true}); const wallet=metaMaskWallet(win({providers:[other,mm]}));
   assert.equal(mm.methods.length,0); assert.equal(other.methods.length,0); assert.throws(()=>wallet.provider,/approve/);
   assert.equal(await wallet.connect('metamask'),address); assert.equal(wallet.provider,mm);
-  assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_requestAccounts']);
+  assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_accounts']);
   await wallet.connect('metamask'); assert.equal(mm.methods.filter(m=>m==='wallet_requestPermissions').length,2);
 });
 test('rejected permission never reads accounts or leaves an app connection', async () => {
@@ -54,6 +54,11 @@ test('unsupported permission API falls back to an explicit account request; reje
  const p=provider({async request({method}) {this.methods.push(method);if(method==='wallet_requestPermissions')throw Object.assign(Error('Unsupported'),{code:4200});return [address];}});
  assert.equal(await metaMaskWallet(win(p)).connect(),address);assert.deepEqual(p.methods,['wallet_requestPermissions','eth_requestAccounts']);
 });
+test('permission success normally reads accounts once and prompts again only if the wallet returns none',async()=>{
+ const p=provider({async request({method}){this.methods.push(method);return method==='eth_accounts'?[]:method==='eth_requestAccounts'?[address]:[];}});
+ assert.equal(await metaMaskWallet(win(p)).connect(),address);
+ assert.deepEqual(p.methods,['wallet_requestPermissions','eth_accounts','eth_requestAccounts']);
+});
 
 test('automatic connection chooses MetaMask instead of the browser default wallet',async()=>{
  const other=provider({isMetaMask:false,isCoinbaseWallet:true}),mm=provider(),window=win(other),wallet=metaMaskWallet(window);
@@ -79,8 +84,8 @@ test('a stalled MetaMask prompt times out and late approval cannot silently conn
 
 test('multiple approved accounts are revoked and never attached as a Kairo connection',async()=>{
  const second='0x2222222222222222222222222222222222222222';let accounts=[address,second];
- const mm=provider({async request({method}){this.methods.push(method);if(method==='eth_requestAccounts')return accounts;return [];}}),wallet=metaMaskWallet(win(mm));
+ const mm=provider({async request({method}){this.methods.push(method);if(['eth_requestAccounts','eth_accounts'].includes(method))return accounts;return [];}}),wallet=metaMaskWallet(win(mm));
  await assert.rejects(wallet.connect(),/exactly one account/);assert.throws(()=>wallet.provider,/Connect/);
- assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_requestAccounts','wallet_revokePermissions']);
+ assert.deepEqual(mm.methods,['wallet_requestPermissions','eth_accounts','wallet_revokePermissions']);
  accounts=[second];assert.equal(await wallet.connect(),second);assert.equal(wallet.provider,mm);
 });
