@@ -35,12 +35,23 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
     get name() { return wallets().find(item => item.id === walletId)?.name || 'Wallet'; },
     get wallets() { return wallets().filter(item => item.id === 'metamask').map(({id,name}) => ({id,name})); },
     get lastUsed() { return lastUsed(); },
+    async metaMaskProvider() {
+      if(selected && walletId==='metamask')return selected;
+      const injected=wallets().find(entry=>entry.id==='metamask'&&entry.provider);
+      if(injected)return injected.provider;
+      if(win.kairoPrivy){
+        const wallet=await win.kairoPrivy.connect(['metamask']);
+        if(!wallet?.provider?.request)throw Error('MetaMask did not return a wallet connection.');
+        return wallet.provider;
+      }
+      throw Error('Open this page in MetaMask to import the POAP, or use the contract address and token ID in its details.');
+    },
     async restore(address) { if(win.kairoPrivy){const entry=await win.kairoPrivy.restore(address);if(entry){attach({id:entry.name||'privy',provider:entry.provider});return;}} const entry = wallets().find(item => item.id === 'metamask' && item.provider); if (entry) attach(entry); },
-    async disconnect() {
+    async disconnect({switchAccount=false} = {}) {
       const provider = selected; detach();
       try { await provider?.request({method:'wallet_revokePermissions',params:[{eth_accounts:{}}]}); } catch { /* Wallets may not implement permission revocation. */ }
       await mobile?.disconnect().catch(() => {});
-      await win.kairoPrivy?.disconnect();
+      if(!switchAccount)await win.kairoPrivy?.disconnect();
     },
     async connect(id = 'metamask', {switchAccount=false} = {}) {
       if (id !== 'metamask') throw Error('Kairo connects with MetaMask only.');
@@ -48,14 +59,15 @@ export function metaMaskWallet(win, changed = () => {}, loadMobileWallet = async
       if(win.kairoPrivy){
         pending=true;
         try {
-          const wallet=await win.kairoPrivy.connect(switchAccount?['metamask']:undefined);
-          if(!/^0x[\da-f]{40}$/i.test(wallet.address)||typeof wallet.provider?.request!=='function')throw Error('The wallet did not return a valid Ethereum account.');
-          if(switchAccount){
-            await wallet.provider.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]});
-            const accounts=await wallet.provider.request({method:'eth_accounts'});
-            if(accounts.length!==1||!/^0x[\da-f]{40}$/i.test(accounts[0]))throw Error('Select exactly one MetaMask account.');
+          const wallet=await win.kairoPrivy.connect(undefined,{switchAccount});
+          if(switchAccount&&wallet.name==='metamask') {
+            try {await wallet.provider.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]});}
+            catch(error){if(![4200,-32601].includes(error.code))throw error;}
+            const accounts=await wallet.provider.request({method:'eth_requestAccounts'});
+            if(!Array.isArray(accounts)||accounts.length!==1)throw Error('Select exactly one account in MetaMask for this Kairo session, then connect again.');
             wallet.address=accounts[0];
           }
+          if(!/^0x[\da-f]{40}$/i.test(wallet.address)||typeof wallet.provider?.request!=='function')throw Error('The wallet did not return a valid Ethereum account.');
           attach({id:wallet.name||'privy',provider:wallet.provider});return wallet.address;
         }finally{pending=false;}
       }

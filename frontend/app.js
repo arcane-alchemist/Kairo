@@ -1,7 +1,7 @@
 import { installPrivy } from './privy.js';
 import { createApiClient } from './api.js';
 import { csv } from '../serverless/claims.js';
-import { eventState, matchesEvent, profileStats, filterCollection, groupCollection } from './student-model.js';
+import { eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollection, groupCollection } from './student-model.js';
 import { claimEntry } from './claim-route.js';
 import { BrowserProvider, Contract, getAddress, hexlify, toUtf8Bytes } from 'ethers';
 import QRCode from 'qrcode';
@@ -9,9 +9,10 @@ import { badgeSvg } from './art.js';
 import { mountHomeArt } from './home-art.js';
 import { mountNative } from './native.js';
 import { metaMaskWallet } from './wallet.js';
-import { aboutContent, documentationContent, issuerContent, doodle } from './content.js';
+import { aboutContent, issuerContent, doodle } from './content.js';
 import { createPageLoader } from './page-loader.js';
 import { preserveEventDraft } from './event-draft.js';
+import { submitPublication, uncertainPublication } from './publication.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const all = (selector, parent = document) => [...parent.querySelectorAll(selector)];
@@ -30,7 +31,8 @@ let initialized = false, homeArtMounted = false;
 let connectedWallet = '', activeChain = '', collectionRequest = 0;
 let events = [], config = {}, session = null, renderId = 0;
 let ticketTimer = null, pageTimer = null, drawEvents = null, ticketView = 0;
-let apiError = '';
+let apiError = '', configError = '';
+let configRequest;
 let walletRevision = 0, logoutRequest = Promise.resolve(), signInRequest = Promise.resolve();
 const walletClient = metaMaskWallet(window, async (event, value) => {
   if (event === 'accountsChanged' && value?.length===1 && typeof value?.[0] === 'string' && value[0].toLowerCase() === connectedWallet.toLowerCase()) return;
@@ -102,7 +104,7 @@ const post = (path, data) => api(path, { method: 'POST', body: JSON.stringify(da
 async function busy(button, action) {
   if (button.disabled) return;
   const content = [...button.childNodes]; button.disabled = true; button.setAttribute('aria-disabled', 'true'); button.setAttribute('aria-busy', 'true'); button.textContent = 'One moment…';
-  try { return await action(); } catch (error) { if(button.id==='publish-button'){const status=document.querySelector('#publish-status');if(status?.querySelector('.inline-loading'))status.textContent=error.message;}retryNotice(error,() => button.isConnected ? busy(button,action) : render()); toast(error.code === 4001 || error.code === 'ACTION_REJECTED' ? 'Request cancelled. You can try again.' : error.code === -32002 ? 'A MetaMask request is already open. Review it in your wallet.' : error.message || 'Something went wrong'); }
+  try { return await action(); } catch (error) { if(button.id==='publish-button'){const status=document.querySelector('#publish-status');if(status?.querySelector('.inline-loading'))status.textContent=error.message;}retryNotice(error,() => button.isConnected ? busy(button,action) : render()); toast(error.code === 4001 || error.code === 'ACTION_REJECTED' ? 'Request cancelled. You can try again.' : error.code === -32002 ? 'A wallet request is already open. Review it in your wallet.' : error.message || 'Something went wrong'); }
   finally { button.disabled = false; button.removeAttribute('aria-disabled'); button.removeAttribute('aria-busy'); button.replaceChildren(...content); if (button.id === 'wallet' || button.id === 'wallet-network') walletHeader(); }
 }
 
@@ -128,7 +130,7 @@ function claimForm(event, standalone = true, redeemToken = '') {
   main.innerHTML=`<section class="panel claim-panel"><h2>${esc(event.title)}</h2>${event.image?`<div class="dialog-art">${artwork(event)}</div>`:''}<p>${esc(event.description)}</p><p role="status">Minting has closed for this event. Existing POAPs remain in their owners’ galleries.</p><a class="button" href="#gallery">View my gallery</a></section>`;
   return;
  }
- const html=`<h2>${esc(event.title)}</h2><p>Role: <strong>${esc((event.roles||['Attendee'])[0])}</strong></p><p>${esc(event.description)}</p>${event.image?`<div class="dialog-art">${artwork(event)}</div>`:''}<p>Mint window: ${date(event.mintStartsAt)} ${time(event.mintStartsAt)} – ${date(event.mintEndsAt)} ${time(event.mintEndsAt)}</p><div class="notice">${redeemToken?'A link works for whoever opens it first.':'One POAP per wallet and role. Minting requires event approval and an open mint window.'}</div><label id="claim-consent-row" class="checkbox" ${session?'':'hidden'}><input id="claim-consent" type="checkbox"><span>I want this permanent, public POAP in my connected MetaMask wallet.</span></label><p id="claim-wallet">${session?`Connected: ${esc(session.wallet)}`:'Connect MetaMask to sign in.'}</p><button id="claim-connect" class="button" ${session?'hidden':''}>Connect wallet</button><button id="claim-mint" class="button" ${session?'':'hidden disabled'}>Mint POAP ↗</button>`;
+ const html=`<h2>${esc(event.title)}</h2><p>Role: <strong>${esc((event.roles||['Attendee'])[0])}</strong></p><p>${esc(event.description)}</p>${event.image?`<div class="dialog-art">${artwork(event)}</div>`:''}<p>Mint window: ${date(event.mintStartsAt)} ${time(event.mintStartsAt)} – ${date(event.mintEndsAt)} ${time(event.mintEndsAt)}</p><div class="notice">${redeemToken?'A link works for whoever opens it first.':'One POAP per wallet and role. Minting requires event approval and an open mint window.'}</div><label id="claim-consent-row" class="checkbox" ${session?'':'hidden'}><input id="claim-consent" type="checkbox"><span>I want this permanent, public POAP in my connected wallet.</span></label><p id="claim-wallet">${session?`Connected: ${esc(session.wallet)}`:'Connect your wallet through Privy to mint this POAP.'}</p><button id="claim-connect" class="button" ${session?'hidden':''}>Connect wallet</button><button id="claim-mint" class="button" ${session?'':'hidden disabled'}>Mint POAP ↗</button>`;
  drawEvents=null; main.innerHTML=`<section class="panel claim-panel">${html}</section>`;
  main.querySelector('#claim-connect').onclick=headerConnect;
  const button=main.querySelector('#claim-mint');
@@ -153,7 +155,7 @@ async function showTicket(id,event) {
    if(view!==ticketView||!main.querySelector('#mint-status'))return;
    if(row.status==='confirmed') {
     clearInterval(ticketTimer);
-    main.innerHTML=`<section class="mint-success" role="status"><h2>Woo hoo, POAP minted!</h2>${event?.image?`<div class="dialog-art">${artwork(event)}</div>`:''}<h3>${esc(event?.title||'Your POAP')}</h3><p>This POAP signifies your attendance.</p><p>${esc(event?.description||'')}</p><p>Your token ID: <strong>${esc(row.token_id)}</strong></p><p>Your POAP is already in your wallet.</p><button id="mint-add-metamask" class="button button-dark">Add to MetaMask</button><a class="button" href="#collector/collection">View my collection ↗</a><a class="button button-light" href="${txLink(row.tx_hash,row.token_id)}" target="_blank" rel="noopener">View on Etherscan ↗</a></section>`;
+    main.innerHTML=`<section class="mint-success" role="status"><h2>Woo hoo, POAP minted!</h2>${event?.image?`<div class="dialog-art">${artwork(event)}</div>`:''}<h3>${esc(event?.title||'Your POAP')}</h3><p>This POAP signifies your attendance.</p><p>${esc(event?.description||'')}</p><p>Your token ID: <strong>${esc(row.token_id)}</strong></p><p>Your POAP is already in your connected wallet.</p><p>Select the same receiving wallet in MetaMask to import it on Sepolia.</p><button id="mint-add-metamask" class="button button-dark">Add to MetaMask</button><a class="button" href="#collector/collection">View my collection ↗</a><a class="button button-light" href="${txLink(row.tx_hash,row.token_id)}" target="_blank" rel="noopener">View on Etherscan ↗</a></section>`;
     const importButton=main.querySelector('#mint-add-metamask');
     importButton.onclick=()=>busy(importButton,()=>addNFTToMetaMask({ownershipVerified:true,contractAddress:config.contractAddress,tokenId:String(row.token_id)},row.wallet));
    } else main.querySelector('#mint-status').textContent=row.status==='failed'?'Mint failed. Ask the organizer to retry.':row.status==='submitted'?'Awaiting blockchain confirmation…':'Queued for sponsored minting…';
@@ -163,23 +165,33 @@ async function showTicket(id,event) {
 }
 function walletHeader() {
   const adminProfile=document.querySelector('#admin-profile');
-  if(adminProfile)adminProfile.hidden=!session?.admin;
-  const welcome = document.querySelector('#wallet-welcome');
-  if (welcome) welcome.hidden = Boolean(session);
+  if(adminProfile){
+    adminProfile.hidden=!session?.admin&&!session?.adminUnavailable;
+    const message=adminProfile.querySelector?.('span');
+    if(message)message.innerHTML=session?.adminUnavailable?'<strong>Admin panel</strong> · Your wallet is configured as super admin. Network verification is unavailable; retry to open your panel.':'<strong>Admin panel</strong> · You can review events and POAP requests.';
+  }
   document.querySelector('#wallet').textContent = session ? short(session.wallet) : 'Connect wallet';
   const node = document.querySelector('#wallet-network');
-  const wrong = Boolean(activeChain && activeChain !== chainHex());
+  const wrong = Boolean(activeChain && Number.isSafeInteger(config.chainId) && activeChain !== chainHex());
   node.hidden = !session && !connectedWallet;
-  node.textContent = wrong ? `Switch to ${config.chainName}` : activeChain ? config.chainName : 'Check network';
-  node.disabled = Boolean(activeChain) && !wrong;
+  node.textContent = !Number.isSafeInteger(config.chainId) ? 'Retry network' : wrong ? `Switch to ${config.chainName}` : activeChain ? config.chainName : 'Check network';
+  node.disabled = Boolean(activeChain) && Number.isSafeInteger(config.chainId) && !wrong;
   node.classList.toggle('wrong-network', wrong);
+}
+async function ensureConfig() {
+  if (Number.isSafeInteger(config.chainId) && config.chainId > 0) return config;
+  if (!configRequest) configRequest = api('/config').then(value => {
+    if (!Number.isSafeInteger(value.chainId) || value.chainId <= 0 || !value.chainName) throw Error('Kairo returned incomplete wallet network settings. Retry the connection.');
+    config=value;if(configError)document.querySelector('#request-error').hidden=true;configError='';return config;
+  }).finally(()=>{configRequest=null;});
+  return configRequest;
 }
 function chainHex() {
   if (!Number.isSafeInteger(config.chainId) || config.chainId <= 0) throw Error('Wallet network configuration is unavailable. Reload and try again.');
   return `0x${config.chainId.toString(16)}`;
 }
-async function switchNetwork() {
-  const provider = walletClient.provider;
+async function switchNetwork(provider = walletClient.provider, updateHeader = true) {
+  await ensureConfig();
   if (await provider.request({method:'eth_chainId'}) !== chainHex()) {
     try { await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:chainHex()}]}); }
     catch (error) {
@@ -188,8 +200,9 @@ async function switchNetwork() {
       await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:chainHex()}]});
     }
   }
-  await updateNetwork();
-  if (activeChain !== chainHex()) throw Error(`Switch to ${config.chainName} in your wallet to continue.`);
+  if(updateHeader)await updateNetwork();
+  const chain=updateHeader?activeChain:await provider.request({method:'eth_chainId'});
+  if (chain !== chainHex()) throw Error(`Switch to ${config.chainName} in your wallet to continue.`);
 }
 function headerConnect() {
   close();
@@ -197,6 +210,7 @@ function headerConnect() {
   if (!button.disabled) return button.onclick();
 }
 async function connect(accountChanged = false, switchAccount = false) {
+  await ensureConfig();
   if (!accountChanged&&!connectedWallet) await connectWallet(switchAccount);
   const revision = walletRevision;
   const previous = signInRequest;
@@ -235,18 +249,17 @@ async function connect(accountChanged = false, switchAccount = false) {
     throw error;
   } finally { release(); }
 }
-document.querySelector('#home-connect').onclick = () => headerConnect();
 document.querySelector('#wallet').onclick = () => busy(document.querySelector('#wallet'), async () => {
   if (!session) {
     await connect(); await render();
     return;
   }
-  show(`<h2>${session.superAdmin?'Your superadmin profile':session.admin?'Your admin profile':'Your wallet'}</h2><code class="wallet-address">${esc(session.wallet)}</code><p>${session.admin?'You are signed in to the admin panel. Review POAP requests and manage events from your dashboard.':'One MetaMask account is used per Kairo session. When switching, select only the account you want to use.'}</p>${session.admin?'<a class="button button-dark" href="#admin">Events & requests ↗</a>':''}<a class="button button-light" href="#gallery">My gallery</a><div class="form-actions"><button id="wallet-change" class="button">Switch account</button><button id="wallet-copy" class="button button-light">Copy address</button><button id="wallet-disconnect" class="button button-light">Disconnect</button></div>`);
+  show(`<h2>${session.superAdmin?'Your superadmin profile':session.admin?'Your admin profile':'Your wallet'}</h2><code class="wallet-address">${esc(session.wallet)}</code><p>${session.admin?'You are signed in to the admin panel. Review POAP requests and manage events from your dashboard.':'One connected wallet is used per Kairo session. Use Privy to choose a different wallet.'}</p>${session.admin?'<a class="button button-dark" href="#admin">Events & requests ↗</a>':''}<a class="button button-light" href="#gallery">My gallery</a><div class="form-actions"><button id="wallet-change" class="button">Switch account</button><button id="wallet-copy" class="button button-light">Copy address</button><button id="wallet-disconnect" class="button button-light">Disconnect</button></div>`);
   modalBody.querySelector('#wallet-copy').onclick = event => busy(event.target, async () => { if (!navigator.clipboard?.writeText) throw Error('Copy is unavailable here. Select the address above to copy it.'); await navigator.clipboard.writeText(session.wallet); toast('Wallet address copied'); });
   modalBody.querySelector('#wallet-change').onclick = event => busy(event.target, async () => {
     session=null;connectedWallet='';activeChain='';walletRevision++;collectionRequest++;walletHeader();close();
     logoutRequest=post('/auth/logout',{});
-    await Promise.all([logoutRequest,walletClient.disconnect()]);
+    await Promise.all([logoutRequest,walletClient.disconnect({switchAccount:true})]);
     try { await connect(false,true); } finally { walletHeader(); await render(); }
   });
   modalBody.querySelector('#wallet-disconnect').onclick = event => busy(event.target, async () => {
@@ -306,28 +319,15 @@ function showEvent(event) {
  });};
 }
 
-async function shareDrop(event) {
- show(`<h2>Walk-in QR · ${esc(event.title)}</h2><canvas id="drop-qr"></canvas><p id="qr-status" role="status"></p><p>A QR scanned live and shared cannot be distinguished from one scanned in person. Codes rotate about every 30 seconds.</p>`);
- const canvas=modalBody.querySelector('canvas'),view=renderId;
- const refresh=async()=>{
-  try {const result=await api(`/events/${event.id}/qr`);if(!modal.open||view!==renderId||!canvas.isConnected)return;
-   const link=new URL(location.origin);link.searchParams.set('drop',event.id);link.searchParams.set('qr',result.token);
-   await QRCode.toCanvas(canvas,link.href,{width:300,margin:3});
-   if(canvas.isConnected)modalBody.querySelector('#qr-status').textContent='Live QR · scan and sign in with MetaMask';
-  }catch(error){if(canvas.isConnected)modalBody.querySelector('#qr-status').textContent=error.message;}
- };
- await refresh();ticketTimer=setInterval(refresh,30000);
-}
 async function addNFTToMetaMask(item,owner) {
  if(!item?.ownershipVerified||!session||session.wallet.toLowerCase()!==owner.toLowerCase())throw Error('Sign in with the wallet that owns this POAP.');
  const address=getAddress(item.contractAddress);
  if(address==='0x0000000000000000000000000000000000000000'||!/^\d+$/.test(item.tokenId))throw Error('This POAP’s import details are unavailable.');
- let provider;
- try {provider=walletClient.provider;}catch {await walletClient.connect('metamask');provider=walletClient.provider;}
+ const provider=await walletClient.metaMaskProvider();
  let accounts=await provider.request({method:'eth_accounts'});
- if(!accounts.length){await walletClient.connect('metamask');provider=walletClient.provider;accounts=await provider.request({method:'eth_accounts'});}
- if(accounts.length!==1||accounts[0].toLowerCase()!==owner.toLowerCase())throw Error('Select only the wallet that owns this POAP in MetaMask, then try again.');
- connectedWallet=getAddress(accounts[0]);await switchNetwork();
+ if(!accounts.length)accounts=await provider.request({method:'eth_requestAccounts'});
+ if(accounts.length!==1||accounts[0].toLowerCase()!==owner.toLowerCase())throw Error('Select the same receiving wallet in MetaMask to import this POAP.');
+ await switchNetwork(provider,false);
  accounts=await provider.request({method:'eth_accounts'});
  if(!session||session.wallet.toLowerCase()!==owner.toLowerCase()||accounts.length!==1||accounts[0].toLowerCase()!==owner.toLowerCase())throw Error('Wallet changed. Select the receiving wallet and try again.');
  try {
@@ -442,12 +442,16 @@ async function organizer(version,adminView=false) {
    const creator=event.organizer?.toLowerCase()===session.wallet.toLowerCase();
    const links=recipientPage.rows;
    const mintStart=stats.mintStartsAt??event.mintStartsAt,mintEnd=stats.mintEndsAt??event.mintEndsAt;
-   const qrReady=event.listed&&!event.paused&&!stats.paused&&Date.now()/1000>=mintStart&&Date.now()/1000<=mintEnd&&stats.capRemaining>0;
-   const mintReason=qrReady?'Ready to mint on Sepolia.':!event.listed?'Event rejected.':event.paused||stats.paused?'Minting is paused.':Date.now()/1000<mintStart?'The mint window has not opened.':Date.now()/1000>mintEnd?'The mint window has ended.':'No supply remains.';
-   content.innerHTML=`${adminView?`<section class="panel" aria-label="POAP request review"><h2>POAP requests · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Address</th><th>Status</th><th>Actions</th></tr></thead><tbody>${requests.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(row.status)}${row.mint_status?` · ${esc(row.mint_status)}`:''}${row.error?`<small>${esc(row.error)}</small>`:''}</td><td>${row.status==='pending'?`<button class="button button-small" data-request="${esc(row.id)}" data-decision="accept" ${qrReady?'':'disabled'}>Accept & mint</button><button class="button button-danger button-small" data-request="${esc(row.id)}" data-decision="reject">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="3">No POAP requests yet.</td></tr>'}</tbody></table></div><div id="request-pages"></div></section>`:''}<div class="stats claim-stats">${[['Links issued',stats.linksIssued],['Links used',stats.linksUsed],['QR claims',stats.qrClaims],['Minted',stats.minted],['Pending',stats.pending],['Failed',stats.failed],['Cap remaining',stats.capRemaining??'Unlimited']].map(([name,value])=>`<div class="stat"><small>${name}</small><strong>${esc(value)}</strong></div>`).join('')}</div><div class="form-actions">${event.roles[0].toLowerCase()==='attendee'?`<button id="walk-in" class="button" ${qrReady?'':'disabled'}>Walk-in QR</button>`:''}<button id="refresh-dashboard" class="button button-light">Refresh</button><a class="button button-light" href="/api/events/${id}/export" download>Export transactions CSV</a></div><p>Walk-in QR is available for Attendees during the mint window, while minting is active and supply remains. Recipient links can be prepared now and redeemed during that window.</p><h2>Public mint link</h2><p>Share this link with participants. Each wallet can mint this role once after event approval.</p><input aria-label="Public mint link" readonly value="${esc(location.origin)}/#drop/${esc(id)}"><h2>Single-use recipient links</h2><p>A link works for whoever opens it first. Emails are private to you and the super admin and are deleted after ${esc(config.emailRetentionDays||30)} days, or on request. Save links when issued: only their hashes are stored.</p><form id="recipients-form"><label class="field">Paste email,role CSV (or enter one person per line)<textarea name="recipients" required placeholder="email,role&#10;person@example.org,Attendee"></textarea></label><label class="field">Or upload CSV<input id="recipient-file" type="file" accept=".csv,text/csv"></label><button class="button">Create links</button></form><div id="issued-links"></div><button class="button button-light" id="erase-emails">Delete all emails for this role</button><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Email</th><th>State</th><th>Actions</th></tr></thead><tbody>${links.map(link=>`<tr><td>${esc(link.email||'Email deleted')}</td><td>${esc(link.revoked_at?'Revoked':link.state)}</td><td>${link.state==='issued'?`<button class="button button-light button-small" data-regenerate="${esc(link.id)}">Regenerate</button><button class="button button-light button-small" data-revoke="${esc(link.id)}">Revoke</button>`:''}<button class="button button-light button-small" data-delete-email="${esc(link.id)}">Delete email</button></td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">No recipient links yet. Add recipients above to get started.</td></tr>'}</tbody></table></div><div id="link-pages"></div><h2>Transactions · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Wallet</th><th>Role</th><th>Claim method</th><th>Token</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>${transactions.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(event.roles[0])}</td><td>${esc(row.method)}</td><td>${esc(row.token_id||'—')}</td><td>${esc(row.status)}${row.error?`<small>${esc(row.error)}</small>`:''}${row.status==='failed'?` <button class="button button-light button-small" data-retry="${esc(row.id)}">Retry</button>`:''}</td><td>${date(row.created_at)} ${time(row.created_at)}</td><td>${row.tx_hash?`<a href="${txLink(row.tx_hash)}" target="_blank" rel="noopener">Etherscan ↗</a>`:'Queued'}</td></tr>`).join('')||'<tr><td colspan="7" class="table-empty">No claims yet. Transactions will appear here when participants mint.</td></tr>'}</tbody></table></div><div id="transaction-pages"></div>${adminView&&!event.deleted?`<section class="panel admin-event-tools"><h2>Mint POAP to an address</h2><p>Mint the selected role directly to a recipient. POAPs are permanent and cannot be transferred or burned. Check the address before minting.</p><form id="direct-mint"><label class="field">Recipient Ethereum address<input name="wallet" required pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button" ${qrReady?'':'disabled'}>Mint POAP</button></form><p role="status">${esc(mintReason)} Mint window: ${date(mintStart)} ${time(mintStart)} – ${date(mintEnd)} ${time(mintEnd)}.</p><h2>Event moderation</h2><p>Moderation applies to every role of this event. On-chain pause changes are queued through the relayer. Badge artwork and the mint window are frozen on chain and cannot be edited.</p><div class="form-actions"><button class="button button-light button-small" data-admin="verify">Accept / mark verified</button><button class="button button-light button-small" data-admin="pause">Pause minting</button><button class="button button-light button-small" data-admin="resume">Resume minting</button></div><form id="reject-event"><label class="field">Rejection reason<textarea name="reason" required maxlength="1000"></textarea></label><button class="button button-danger">Reject event</button></form></section>`:''}${(adminView||creator)&&!event.deleted?`<section class="panel"><h2>Edit event details</h2><form id="edit-event"><label class="field">Title<input name="title" value="${esc(event.title)}" required maxlength="100"></label><label class="field">Description<textarea name="description" required maxlength="1000">${esc(event.description)}</textarea></label><label class="field">Venue<input name="venue" value="${esc(event.venue)}" required maxlength="300"></label><label class="field">Category<select name="category">${config.categories.map(c=>`<option ${c===event.category?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label class="field">Organization<input name="club" value="${esc(event.club||'')}" required minlength="2" maxlength="80"></label><label class="field">Campus<input name="campus" value="${esc(event.campus||'')}" maxlength="100"></label><label class="field">Event starts<input name="eventStartsAt" type="datetime-local" required value="${localInput(event.startsAt)}"></label><label class="field">Event ends<input name="eventEndsAt" type="datetime-local" required value="${localInput(event.endsAt)}"></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="${esc(event.approximateAttendees||1)}"></label><p>These changes update the event listing. Published POAP artwork, badge metadata, supply and mint dates stay permanent.</p><button class="button button-dark">Save event details</button></form></section>`:''}${creator&&!event.deleted?`<section class="panel"><h2>Delete event listing</h2><p>Removes every role of this event from discovery and blocks new claims. Existing POAPs, artwork and transaction history stay permanent. A mint already submitted may confirm before the pause.</p><form id="delete-event"><label class="checkbox"><input type="checkbox" required><span>I want to remove this event listing and stop new mint requests.</span></label><button class="button button-danger">Delete event</button></form></section>`:''}`;
+   const mintReady=event.approval!=='pending'&&event.listed&&!event.paused&&!stats.paused&&Date.now()/1000>=mintStart&&Date.now()/1000<=mintEnd&&stats.capRemaining>0;
+   const mintReason=mintReady?'Ready to mint on Sepolia.':event.approval==='pending'?'Awaiting super-admin approval.':!event.listed?'Event rejected.':event.paused||stats.paused?'Minting is paused.':Date.now()/1000<mintStart?'The mint window has not opened.':Date.now()/1000>mintEnd?'The mint window has ended.':'No supply remains.';
+   content.innerHTML=`${event.approval==='pending'?'<div class="notice" role="status">Awaiting super-admin approval. Participants can mint after this event is approved.</div>':''}${adminView&&!event.deleted?`<section class="panel event-approval" aria-labelledby="event-approval-title"><h2 id="event-approval-title">Event approval</h2><p>${esc(event.title)} · ${esc(event.venue)}</p><p>${event.approval==='approved'?'This event is approved.':event.approval==='rejected'?'This event was rejected.':'Review this organizer’s event before participants can mint POAPs.'}</p><button class="button button-dark" data-admin="verify" ${event.approval==='approved'?'disabled':''}>${event.approval==='approved'?'Event approved':'Accept event'}</button><form id="reject-event"><label class="field">Rejection reason<textarea name="reason" required maxlength="1000"></textarea></label><button class="button button-danger">Reject event</button></form></section>`:''}${adminView?`<section class="panel" aria-label="POAP request review"><h2>POAP requests · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Address</th><th>Status</th><th>Actions</th></tr></thead><tbody>${requests.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(row.status)}${row.mint_status?` · ${esc(row.mint_status)}`:''}${row.error?`<small>${esc(row.error)}</small>`:''}</td><td>${row.status==='pending'?`<button class="button button-small" data-request="${esc(row.id)}" data-decision="accept" ${mintReady?'':'disabled'}>Accept & mint</button><button class="button button-danger button-small" data-request="${esc(row.id)}" data-decision="reject">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="3">No POAP requests yet.</td></tr>'}</tbody></table></div><div id="request-pages"></div></section>`:''}<div class="stats claim-stats">${[['Links issued',stats.linksIssued],['Links used',stats.linksUsed],['Minted',stats.minted],['Pending',stats.pending],['Failed',stats.failed],['Cap remaining',stats.capRemaining??'Unlimited']].map(([name,value])=>`<div class="stat"><small>${name}</small><strong>${esc(value)}</strong></div>`).join('')}</div><div class="form-actions"><button id="refresh-dashboard" class="button button-light">Refresh</button><a class="button button-light" href="/api/events/${id}/export" download>Export transactions CSV</a></div><p>Approved events can be shared using their public mint link. Participants connect through Privy and mint during the configured window.</p>${event.approval==='pending'?'<section class="notice"><h2>Public mint link</h2><p>Your event is awaiting super-admin approval. The participant mint link will appear here after approval.</p></section>':event.listed?`<section class="panel"><h2>Public mint link</h2><p>Share this link with participants. They can connect through Privy and mint their POAP during the minting window.</p><input id="public-mint-link" aria-label="Public mint link" readonly value="${esc(location.origin)}/#drop/${esc(id)}"><button id="copy-public-mint-link" class="button button-light" type="button">Copy mint link</button></section>`:''}<h2>Single-use recipient links</h2><p>A link works for whoever opens it first. Emails are private to you and the super admin and are deleted after ${esc(config.emailRetentionDays||30)} days, or on request. Save links when issued: only their hashes are stored.</p><form id="recipients-form"><label class="field">Paste email,role CSV (or enter one person per line)<textarea name="recipients" required placeholder="email,role&#10;person@example.org,Attendee"></textarea></label><label class="field">Or upload CSV<input id="recipient-file" type="file" accept=".csv,text/csv"></label><button class="button">Create links</button></form><div id="issued-links"></div><button class="button button-light" id="erase-emails">Delete all emails for this role</button><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Email</th><th>State</th><th>Actions</th></tr></thead><tbody>${links.map(link=>`<tr><td>${esc(link.email||'Email deleted')}</td><td>${esc(link.revoked_at?'Revoked':link.state)}</td><td>${link.state==='issued'?`<button class="button button-light button-small" data-regenerate="${esc(link.id)}">Regenerate</button><button class="button button-light button-small" data-revoke="${esc(link.id)}">Revoke</button>`:''}<button class="button button-light button-small" data-delete-email="${esc(link.id)}">Delete email</button></td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">No recipient links yet. Add recipients above to get started.</td></tr>'}</tbody></table></div><div id="link-pages"></div><h2>Transactions · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Wallet</th><th>Role</th><th>Claim method</th><th>Token</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>${transactions.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(event.roles[0])}</td><td>${esc(row.method)}</td><td>${esc(row.token_id||'—')}</td><td>${esc(row.status)}${row.error?`<small>${esc(row.error)}</small>`:''}${row.status==='failed'?` <button class="button button-light button-small" data-retry="${esc(row.id)}">Retry</button>`:''}</td><td>${date(row.created_at)} ${time(row.created_at)}</td><td>${row.tx_hash?`<a href="${txLink(row.tx_hash)}" target="_blank" rel="noopener">Etherscan ↗</a>`:'Queued'}</td></tr>`).join('')||'<tr><td colspan="7" class="table-empty">No claims yet. Transactions will appear here when participants mint.</td></tr>'}</tbody></table></div><div id="transaction-pages"></div>${adminView&&!event.deleted?`<section class="panel admin-event-tools"><h2>Mint POAP to an address</h2><p>Mint the selected role directly to a recipient. POAPs are permanent and cannot be transferred or burned. Check the address before minting.</p><form id="direct-mint"><label class="field">Recipient Ethereum address<input name="wallet" required pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button" ${mintReady?'':'disabled'}>Mint POAP</button></form><p role="status">${esc(mintReason)} Mint window: ${date(mintStart)} ${time(mintStart)} – ${date(mintEnd)} ${time(mintEnd)}.</p><h2>Minting controls</h2><p>Pause or resume minting for every role of this event.</p><div class="form-actions"><button class="button button-light button-small" data-admin="pause">Pause minting</button><button class="button button-light button-small" data-admin="resume">Resume minting</button></div></section>`:''}${(adminView||creator)&&!event.deleted?`<section class="panel"><h2>Edit event details</h2><form id="edit-event"><label class="field">Title<input name="title" value="${esc(event.title)}" required maxlength="100"></label><label class="field">Description<textarea name="description" required maxlength="1000">${esc(event.description)}</textarea></label><label class="field">Venue<input name="venue" value="${esc(event.venue)}" required maxlength="300"></label><label class="field">Category<select name="category">${config.categories.map(c=>`<option ${c===event.category?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label class="field">Organization<input name="club" value="${esc(event.club||'')}" required minlength="2" maxlength="80"></label><label class="field">Campus<input name="campus" value="${esc(event.campus||'')}" maxlength="100"></label><label class="field">Event starts<input name="eventStartsAt" type="datetime-local" required value="${localInput(event.startsAt)}"></label><label class="field">Event ends<input name="eventEndsAt" type="datetime-local" required value="${localInput(event.endsAt)}"></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="${esc(event.approximateAttendees||1)}"></label><p>These changes update the event listing. Published POAP artwork, badge metadata, supply and mint dates stay permanent.</p><button class="button button-dark">Save event details</button></form></section>`:''}${creator&&!event.deleted?`<section class="panel"><h2>Delete event listing</h2><p>Removes every role of this event from discovery and blocks new claims. Existing POAPs, artwork and transaction history stay permanent. A mint already submitted may confirm before the pause.</p><form id="delete-event"><label class="checkbox"><input type="checkbox" required><span>I want to remove this event listing and stop new mint requests.</span></label><button class="button button-danger">Delete event</button></form></section>`:''}`;
    content.dataset.editing='false';content.oninput=()=>{content.dataset.editing='true';};
-   content.querySelector('#walk-in')?.addEventListener('click',()=>shareDrop(event));
    content.querySelector('#refresh-dashboard').onclick=select.onchange;
+   const copyLink=content.querySelector('#copy-public-mint-link');
+   if(copyLink)copyLink.onclick=()=>busy(copyLink,async()=>{
+    if(!navigator.clipboard?.writeText)throw Error('Select and copy the public mint link above.');
+    await navigator.clipboard.writeText(content.querySelector('#public-mint-link').value);toast('Public mint link copied.');
+   });
    pageControls(content.querySelector('#transaction-pages'),page,transactions.hasMore,'Transactions',value=>{page=value;select.onchange();});
    pageControls(content.querySelector('#link-pages'),linksPage,recipientPage.hasMore,'Recipient links',value=>{linksPage=value;select.onchange();});
    function issued(rows) {
@@ -519,16 +523,15 @@ function renderSystemPanel(node,{system,health,audit,workspace,auditPage},onPage
  const checks=health.dependencies||{},issues=Object.values(checks).filter(check=>check.status!=='ok');
  const ready=health.status==='ok',balance=system?.balanceETH,hasBalance=balance!==undefined&&Number.isFinite(Number(balance));
  const funded=hasBalance&&Number(balance)>0,contractReady=checks.contract?.status==='ok';
- const serviceNames={config:'App configuration',d1:'Event database',r2:'Badge storage',durableObject:'Transaction queue',rpc:'Sepolia connection',contract:'Kairo contract',relayer:'Gas sponsorship',media:'Public artwork URLs'};
  const pending=(system?.actions||[]).filter(action=>action.status!=='live');
  const addressURL=address=>{
   try{const url=new URL(`/address/${encodeURIComponent(address)}`,config.explorerUrl);return url.protocol==='https:'?esc(url.href):'';}catch{return '';}
  };
- node.innerHTML=`<section class="system-panel" aria-labelledby="system-heading"><header class="panel-heading"><div><h2 id="system-heading">Gas & network</h2><p>Sponsored transactions on Sepolia</p></div><span class="service-badge ${ready?'is-ready':'needs-setup'}"><i aria-hidden="true"></i>${ready?'Ready':'Setup needed'}</span></header>${!ready?`<div class="setup-note"><strong>${!contractReady?'Connect the updated contract':!funded?'Fund the relayer wallet':'Finish publishing setup'}</strong><p>${!contractReady?'The current deployment needs the updated Kairo contract before events can publish.':!funded?'Add Sepolia test ETH to the wallet below. Organizers and participants still mint for free.':esc(issues[0]?.message||'Some services are unavailable. Check the details below.')}</p></div>`:''}<div class="relayer-balance"><span>Relayer balance</span><strong>${hasBalance?Number(balance).toLocaleString(undefined,{maximumFractionDigits:6}):'Unavailable'}</strong><small>Sepolia ETH · test funds</small></div><div class="system-wallet"><span>Gas-paying wallet</span>${system?.relayer?`<a href="${addressURL(system.relayer)}" target="_blank" rel="noopener"><code>${esc(system.relayer)}</code> ↗</a>`:'<p>Could not load the relayer. Refresh to retry.</p>'}${system?.signerAddress&&system.signerAddress.toLowerCase()!==system.relayer?.toLowerCase()?'<p class="inline-warning">The configured key belongs to a different wallet. Update the relayer key.</p>':''}</div><dl class="system-facts"><div><dt>Super admin</dt><dd>${system?.superAdminOnChain?'Verified on chain':'Awaiting verification'}</dd></div><div><dt>Contract</dt><dd>${contractReady?'Connected':'Update required'}</dd></div></dl><details class="service-details"><summary>Service details <span>${Object.values(checks).filter(check=>check.status==='ok').length}/${Object.keys(checks).length} ready</span></summary><ul>${Object.entries(checks).map(([name,check])=>`<li><span>${esc(serviceNames[name]||name)}</span><span class="check-status ${check.status==='ok'?'is-ready':'needs-setup'}">${check.status==='ok'?'Available':'Needs attention'}</span>${check.status!=='ok'?`<p>${esc(check.message||'Refresh to retry this service.')}</p>`:''}</li>`).join('')}</ul></details></section>${pending.length?`<section class="system-panel"><header class="panel-heading"><h2>Moderation in progress</h2></header><ul class="moderation-list">${pending.map(action=>`<li><span class="service-badge ${action.status==='failed'?'needs-setup':''}">${esc(({pending:'Queued',submitted:'Confirming',failed:'Needs attention'})[action.status]||action.status)}</span><p>${action.status==='failed'?'The transaction could not complete. Check the relayer and contract configuration.':'Your change is saved and waiting for Sepolia confirmation.'}</p>${action.tx_hash?`<a class="text-link" href="${txLink(action.tx_hash)}" target="_blank" rel="noopener">View transaction ↗</a>`:''}</li>`).join('')}</ul></section>`:''}<section class="system-panel activity-panel"><header class="panel-heading"><div><h2>Admin activity</h2><p>A record of changes to your events</p></div></header>${audit?activityHTML(audit.rows,workspace):'<p class="panel-empty">Activity could not load. Refresh to try again.</p>'}<div id="audit-pages"></div></section>`;
+ node.innerHTML=`<section class="system-panel" aria-labelledby="system-heading"><header class="panel-heading"><div><h2 id="system-heading">Gas & network</h2><p>Sponsored transactions on Sepolia</p></div><span class="service-badge ${ready?'is-ready':'needs-setup'}"><i aria-hidden="true"></i>${ready?'Ready':'Setup needed'}</span></header>${!ready?`<div class="setup-note"><strong>${!contractReady?'Connect the updated contract':!funded?'Fund the relayer wallet':'Finish publishing setup'}</strong><p>${!contractReady?'The current deployment needs the updated Kairo contract before events can publish.':!funded?'Add Sepolia test ETH to the wallet below. Organizers and participants still mint for free.':esc(issues[0]?.message||'Some services are unavailable. Check the details below.')}</p></div>`:''}<div class="relayer-balance"><span>Relayer balance</span><strong>${hasBalance?Number(balance).toLocaleString(undefined,{maximumFractionDigits:6}):'Unavailable'}</strong><small>Sepolia ETH · test funds</small></div><div class="system-wallet"><span>Gas-paying wallet</span>${system?.relayer?`<a href="${addressURL(system.relayer)}" target="_blank" rel="noopener"><code>${esc(system.relayer)}</code> ↗</a>`:'<p>Could not load the relayer. Refresh to retry.</p>'}${system?.signerAddress&&system.signerAddress.toLowerCase()!==system.relayer?.toLowerCase()?'<p class="inline-warning">The configured key belongs to a different wallet. Update the relayer key.</p>':''}</div><dl class="system-facts"><div><dt>Super admin</dt><dd>${system?.superAdminOnChain?'Verified on chain':'Awaiting verification'}</dd></div><div><dt>Contract</dt><dd>${contractReady?'Connected':'Update required'}</dd></div></dl></section>${pending.length?`<section class="system-panel"><header class="panel-heading"><h2>Moderation in progress</h2></header><ul class="moderation-list">${pending.map(action=>`<li><span class="service-badge ${action.status==='failed'?'needs-setup':''}">${esc(({pending:'Queued',submitted:'Confirming',failed:'Needs attention'})[action.status]||action.status)}</span><p>${action.status==='failed'?'The transaction could not complete. Check the relayer and contract configuration.':'Your change is saved and waiting for Sepolia confirmation.'}</p>${action.tx_hash?`<a class="text-link" href="${txLink(action.tx_hash)}" target="_blank" rel="noopener">View transaction ↗</a>`:''}</li>`).join('')}</ul></section>`:''}<section class="system-panel activity-panel"><header class="panel-heading"><div><h2>Admin activity</h2><p>A record of changes to your events</p></div></header>${audit?activityHTML(audit.rows,workspace):'<p class="panel-empty">Activity could not load. Refresh to try again.</p>'}<div id="audit-pages"></div></section>`;
  pageControls(node.querySelector('#audit-pages'),auditPage,audit?.hasMore,'Activity',onPage);
 }
 async function organizerStudio(version,adminView=false) {
- main.innerHTML=`<header class="studio-heading"><div><h1>${adminView?'Super admin panel.':'Organizer studio.'}</h1><p>${adminView?'You are signed in as superadmin. Review POAP requests across all events.':'Your events. Your designs. Your people.'}</p></div>${session?'<a class="button button-dark" href="#create">Create an event ↗</a>':''}</header><nav class="section-tabs" aria-label="Organizer workspace"><a href="#${adminView?'admin':'issuer/studio'}" aria-current="page">${adminView?'All events':'Your events'}</a><a href="#${adminView?'admin/events':'issuer/manage'}">${adminView?'Review POAP requests':'Manage claims'}</a>${adminView?'<button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>':''}<a href="#issuer/guide">Organizer guide</a></nav>${session?`<div class="studio-layout ${adminView?'with-admin':''}"><section class="studio-main" aria-label="Your events"><div id="studio-events">${loadingMarkup('Loading your events')}</div><div id="studio-pages"></div></section>${adminView?'<aside id="studio-system" class="studio-system" aria-label="Admin system overview"><section class="system-panel"><p class="loading">Checking Sepolia and the relayer…</p></section></aside>':''}</div>`:`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your next event starts here.</h2><p>Sign in with MetaMask to create events, manage your badges and distribute claims from one workspace.</p><button class="button button-dark" id="studio-sign-in">Connect MetaMask</button></section>`}`;
+ main.innerHTML=`<header class="studio-heading"><div><h1>${adminView?'Super admin panel.':'Organizer studio.'}</h1><p>${adminView?'You are signed in as superadmin. Review POAP requests across all events.':'Your events. Your designs. Your people.'}</p></div>${session?'<a class="button button-dark" href="#create">Create an event ↗</a>':''}</header><nav class="section-tabs" aria-label="Organizer workspace"><a href="#${adminView?'admin':'issuer/studio'}" aria-current="page">${adminView?'All events':'Your events'}</a><a href="#${adminView?'admin/events':'issuer/manage'}">${adminView?'Review POAP requests':'Manage claims'}</a>${adminView?'<button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>':''}<a href="#issuer/guide">Organizer guide</a></nav>${session?`<div class="studio-layout ${adminView?'with-admin':''}"><section class="studio-main" aria-label="Your events"><div id="studio-events">${loadingMarkup('Loading your events')}</div><div id="studio-pages"></div></section>${adminView?'<aside id="studio-system" class="studio-system" aria-label="Admin system overview"><section class="system-panel"><p class="loading">Checking Sepolia and the relayer…</p></section></aside>':''}</div>`:`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your next event starts here.</h2><p>Connect with Privy to create events, manage your badges and share mint links from one workspace.</p><button class="button button-dark" id="studio-sign-in">Connect with Privy</button></section>`}`;
  if(adminView){
   main.querySelector('.section-tabs').innerHTML='<a href="#admin" aria-current="page">Review requests & events</a><a href="#admin/activity">Activity</a><button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>';
   main.querySelector('#studio-system').remove();main.querySelector('.studio-layout').classList.remove('with-admin');
@@ -541,7 +544,7 @@ async function organizerStudio(version,adminView=false) {
   workspace=await api(`/${adminView?'admin':'organizer'}/events?page=${workspacePage}`);if(version!==renderId)return;
   const publications=workspace.publications.filter(row=>row.status!=='live');
   const groups=groupCollection(workspace.events);
-  main.querySelector('#studio-events').innerHTML=`${publications.map(row=>`<article class="publication-card"><span class="service-badge ${row.status==='failed'?'needs-setup':''}">${row.status==='failed'?'Needs attention':'Publishing'}</span><h2>${esc(row.details.title)}</h2><p>${row.status==='failed'?'Your event is saved. Check the publishing setup, then retry.':'The relayer is creating your badges. You can leave this page and resume later.'}</p><button class="button button-light button-small" data-resume-publication="${esc(row.id)}">${row.status==='failed'?'Retry publishing':'Check progress'}</button></article>`).join('')}${groups.length?`<div class="studio-event-list">${groups.map(({event,badges})=>`<article class="studio-event-card"><div class="studio-event-art">${artwork(event)}</div><div class="studio-event-info"><div class="studio-event-meta"><span>${date(event.startsAt)}</span><span class="service-badge ${!event.listed||event.paused?'needs-setup':'is-ready'}">${event.deleted?'Deleted':event.approval==='pending'?'Awaiting approval':!event.listed?'Rejected':event.paused?'Paused':eventState(event)==='Happening now'?'Live':eventState(event)}</span></div><h2>${esc(event.title)}</h2><p>${esc(event.venue)}</p><p>${Date.now()/1000>event.mintEndsAt?'Minting closed':Date.now()/1000<event.mintStartsAt?'Minting opens '+date(event.mintStartsAt)+' '+time(event.mintStartsAt):'Mint window open'}</p><div class="studio-role-list">${adminView?`<span>${badges.reduce((sum,badge)=>sum+(badge.pendingRequests||0),0)} pending POAP requests</span>`:''}${badges.map(badge=>`<span>${esc(badge.roles[0])}</span>`).join('')}</div><div class="studio-event-actions"><a class="text-link" href="#${adminView?'admin/events':'issuer/manage'}/${esc((adminView?badges.find(badge=>badge.pendingRequests>0):null)?.id||event.id)}">${adminView?'Review requests & manage event ↗':'Manage event ↗'}</a>${event.listed?`<a class="text-link" href="#drop/${esc(event.id)}">View event</a>`:''}</div></div></article>`).join('')}</div>`:!publications.length?`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your first event starts here.</h2><p>Add your event, make a badge for each role, and publish with sponsored gas.</p><a class="text-link" href="#create">Create your first event ↗</a></section>`:''}`;
+  main.querySelector('#studio-events').innerHTML=`${publications.map(row=>`<article class="publication-card"><span class="service-badge ${row.status==='failed'?'needs-setup':''}">${row.status==='failed'?'Needs attention':'Publishing'}</span><h2>${esc(row.details.title)}</h2><p>${row.status==='failed'?'Your event is saved. Check the publishing setup, then retry.':'The relayer is creating your badges. You can leave this page and resume later.'}</p><button class="button button-light button-small" data-resume-publication="${esc(row.id)}">${row.status==='failed'?'Retry publishing':'Check progress'}</button></article>`).join('')}${groups.length?`<div class="studio-event-list">${groups.map(({event,badges})=>`<article class="studio-event-card"><div class="studio-event-art">${artwork(event)}</div><div class="studio-event-info"><div class="studio-event-meta"><span>${date(event.startsAt)}</span><span class="service-badge ${!event.listed||event.paused?'needs-setup':'is-ready'}">${event.deleted?'Deleted':event.approval==='pending'?'Awaiting approval':!event.listed?'Rejected':event.paused?'Paused':eventState(event)==='Happening now'?'Live':eventState(event)}</span></div><h2>${esc(event.title)}</h2><p>${esc(event.venue)}</p><p>${Date.now()/1000>event.mintEndsAt?'Minting closed':Date.now()/1000<event.mintStartsAt?'Minting opens '+date(event.mintStartsAt)+' '+time(event.mintStartsAt):'Mint window open'}</p><div class="studio-role-list">${adminView?`<span>${badges.reduce((sum,badge)=>sum+(badge.pendingRequests||0),0)} pending POAP requests</span>`:''}${badges.map(badge=>`<span>${esc(badge.roles[0])}</span>`).join('')}</div><div class="studio-event-actions"><a class="text-link" href="#${adminView?'admin/events':'issuer/manage'}/${esc((adminView?badges.find(badge=>badge.pendingRequests>0):null)?.id||event.id)}">${adminView?(event.approval==='pending'?'Review event approval ↗':'Review requests & manage event ↗'):'Manage event ↗'}</a>${event.listed?`<a class="text-link" href="#drop/${esc(event.id)}">View event</a>`:''}</div></div></article>`).join('')}</div>`:!publications.length?`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your first event starts here.</h2><p>Add your event, make a badge for each role, and publish with sponsored gas.</p><a class="text-link" href="#create">Create your first event ↗</a></section>`:''}`;
   pageControls(main.querySelector('#studio-pages'),workspacePage,workspace.hasMore,'Events',page=>{workspacePage=page;organizerStudio(version,adminView);});
   main.querySelectorAll('[data-resume-publication]').forEach(button=>button.onclick=()=>busy(button,async()=>{
    const row=workspace.publications.find(row=>row.id===button.dataset.resumePublication);
@@ -588,16 +591,17 @@ async function adminActivity(version) {
 }
 
 function adminLogin() {
- main.innerHTML=`<header class="studio-heading"><div><h1>Admin sign-in.</h1><p>Event moderation, system health and the audit log.</p></div></header><section class="studio-empty"><h2>Connect an admin wallet</h2><p>The superadmin and wallets granted panel access can sign in here.</p><code class="wallet-address">Superadmin: ${esc(config.superAdminAddress||'')}</code><p>Use MetaMask and sign the login message. No private key or password is needed.</p>${session&&!session.admin?'<p class="inline-warning">Your current wallet has no panel access. Select an authorized account in MetaMask before signing in.</p>':''}<button id="admin-sign-in" class="button button-dark">${session?.admin?'Open admin panel':'Sign in with MetaMask'}</button></section>`;
+ main.innerHTML=`<header class="studio-heading"><div><h1>Connect your wallet.</h1><p>One Privy connection for your events and POAPs.</p></div></header><section class="studio-empty"><h2>Connect your wallet</h2><p>Use Privy to connect your wallet. Your signed-in wallet determines whether you see your organizer studio or event review.</p><p role="status">${session?.adminUnavailable?'Your signed-in wallet matches the configured super admin. Reconnect to Sepolia to verify panel access.':''}</p><button id="admin-sign-in" class="button button-dark">${session?.admin?'Open admin panel':session?.adminUnavailable?'Retry admin verification':'Connect with Privy'}</button></section>`;
  main.querySelector('#admin-sign-in').onclick=event=>busy(event.target,async()=>{
-  if(!session?.admin)await connect();
-  if(!session?.admin)throw Error('This wallet has no admin panel access. Switch accounts in MetaMask.');
-  location.hash='#admin';await render();
+  if(session?.adminUnavailable){session=await api('/auth/me');walletHeader();}
+  else if(!session?.admin)await connect();
+  if(session?.adminUnavailable)throw Error('Admin verification failed. Check Sepolia connectivity and the configured contract/admin addresses, then retry.');
+  location.hash=session?.admin?'#admin':'#issuer/studio';await render();
  });
 }
 
 function createEventPage() {
-  main.innerHTML = `<a class="back-link" href="#${session?.admin?'admin':'issuer/studio'}">← Back to ${session?.admin?'admin dashboard':'studio'}</a><div class="eyebrow">ORGANIZER STUDIO / EVENT EDITOR</div><h1 class="page-title">Give your event a little forever.</h1><p class="lead">Your artwork. Your community. A collectible for everyone who shows up.</p><div class="notice"><a href="#${session?.admin?'admin':'issuer/studio'}">${session?.admin?'Superadmin dashboard':'Back to my studio'} ↗</a> · <a href="#${session?.admin?'admin/events':'issuer/manage'}">${session?.admin?'Review POAP requests':'Manage attendance'} ↗</a><br>Publish immediately with sponsored gas. Badge artwork and the mint window are frozen on chain and cannot be edited.</div><form id="event-form" class="panel"><div class="draft-toolbar"><p id="draft-status" role="status">Your event details are saved in this tab as you type.</p><button type="button" class="text-link" id="discard-event-draft">Clear form</button></div><div class="form-grid"><label class="field">Event title<input name="title" required minlength="3" maxlength="100" placeholder="Your event name"></label><label class="field">Club or community<input name="club" required minlength="2" maxlength="80" placeholder="The Coding Club"></label><label class="field field-full">Description<textarea name="description" required minlength="3" maxlength="1000" placeholder="What makes this moment special?"></textarea></label><label class="field">Category<select name="category">${(config.categories || []).map(name => `<option>${esc(name)}</option>`).join('')}</select></label><label class="field">Campus<input name="campus" maxlength="100" placeholder="Campus name"></label><label class="field">Participation roles<input name="roles" value="Attendee" maxlength="320"><small>Comma-separated, up to 8 roles. Each has its own badge and cap.</small></label><label class="field">Venue<input name="venue" required minlength="2" maxlength="300" placeholder="Innovation Lab, Block A"></label><label class="field">Event starts<input name="starts" type="datetime-local" required></label><label class="field">Event ends<input name="eventEnds" type="datetime-local" required></label><label class="field">Minting opens<input name="mintStarts" type="datetime-local" required></label><label class="field">Minting closes<input name="ends" type="datetime-local" required><small>Allow time after the event for queued mints to confirm.</small></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="50"></label><label class="field field-full">Collectible artwork<small>Choose a design for each role below, or explicitly generate POAPs from your event description.</small></label><div id="role-designs" class="field-full role-designs"></div></div><p class="muted">Use artwork you have permission to publish. Published collectible metadata is permanent.</p><div class="form-actions"><button class="button" id="publish-button" type="submit">Publish event ↗</button><button type="button" class="text-link" id="clear-artwork">Clear design & upload</button></div><div id="publish-status" class="publication-progress" role="status"></div></form>`;
+  main.innerHTML = `<a class="back-link" href="#${session?.admin?'admin':'issuer/studio'}">← Back to ${session?.admin?'admin dashboard':'studio'}</a><div class="eyebrow">ORGANIZER STUDIO / EVENT EDITOR</div><h1 class="page-title">Give your event a little forever.</h1><p class="lead">Your artwork. Your community. A collectible for everyone who shows up.</p><form id="event-form" class="panel"><div class="draft-toolbar"><p id="draft-status" class="sr-only" role="status"></p><button type="button" class="text-link" id="discard-event-draft">Clear form</button></div><div class="form-grid"><label class="field">Event title<input name="title" required minlength="3" maxlength="100" placeholder="Your event name"></label><label class="field">Club or community<input name="club" required minlength="2" maxlength="80" placeholder="The Coding Club"></label><label class="field field-full">Description<textarea name="description" required minlength="3" maxlength="1000" placeholder="What makes this moment special?"></textarea></label><label class="field">Category<select name="category">${(config.categories || []).map(name => `<option>${esc(name)}</option>`).join('')}</select></label><label class="field">Campus<input name="campus" maxlength="100" placeholder="Campus name"></label><label class="field">Participation roles<input name="roles" value="Attendee" maxlength="320"><small>Comma-separated, up to 8 roles. Each has its own badge and cap.</small></label><label class="field">Venue<input name="venue" required minlength="2" maxlength="300" placeholder="Innovation Lab, Block A"></label><label class="field">Event starts<input name="starts" type="datetime-local" required></label><label class="field">Event ends<input name="eventEnds" type="datetime-local" required></label><label class="field">Minting opens<input name="mintStarts" type="datetime-local" required></label><label class="field">Minting closes<input name="ends" type="datetime-local" required><small>Allow time after the event for queued mints to confirm.</small></label><label class="field field-full">Collectible artwork<small>Choose a design for each role below, or explicitly generate POAPs from your event description.</small></label><div id="role-designs" class="field-full role-designs"></div></div><div class="form-actions"><button class="button" id="publish-button" type="submit">Publish event ↗</button></div><div id="publish-status" class="publication-progress" role="status"></div></form>`;
   const form = main.querySelector('form');
   let draftStorage;
   try { draftStorage = window.sessionStorage; } catch { /* Storage can be disabled in private browsers. */ }
@@ -672,36 +676,37 @@ function createEventPage() {
     if (JSON.stringify(values) !== JSON.stringify(roles())) throw Error('Roles changed. Review the designs and save again.');
     return {...roleArtwork[0],roleArtwork};
   }
-  main.querySelector('#clear-artwork').onclick = () => { for (const state of designs.values()) {state.version++; state.image = state.video = state.generated = null; state.reading = false;} drawDesigns(); };
   const pendingKey='kairo-publishing';
+  let pending;
+  try { pending=JSON.parse(localStorage.getItem(pendingKey)||'null'); } catch { pending=null; }
+  let progressFailures=0;
   async function followPublication(id) {
-   const node=main.querySelector('#publish-status');if(!node)return;
-   const result=await api(`/publications/${id}`);if(!node.isConnected)return;
-   node.innerHTML=result.status==='live'?'Event published.':result.status==='failed'?'Publication failed. Check your organizer dashboard.':loadingMarkup('Publishing your event');
-   if(result.status==='live'){draft.clear();localStorage.removeItem(pendingKey);events=await api('/events');location.hash=`${session?.admin?'admin/events':'issuer/manage'}/${result.events[0].id}`;toast(session?.admin?'Event published. POAP requests will appear here for your review.':'Event published. Share the Walk-in QR or create single-use recipient links from your dashboard.');}
-   else if(result.status!=='failed')ticketTimer=setTimeout(()=>followPublication(id).catch(error=>{if(node.isConnected)node.textContent=error.message;}),10000);
+   const node=form.querySelector('#publish-status');if(!node?.isConnected||pending?.id!==id)return;
+   let result;
+   try {result=await api(`/publications/${id}`,{quiet:true});progressFailures=0;}
+   catch(error){
+    if(!node.isConnected||pending?.id!==id)return;
+    if(!uncertainPublication(error))throw error;
+    node.textContent='Your submission is saved. Checking publication progress…';
+    if(++progressFailures<3)ticketTimer=setTimeout(()=>followPublication(id).catch(error=>{if(node.isConnected)node.textContent=error.message;}),10000);
+    else node.innerHTML='<p>Your submission is saved, but its status is unavailable. Check again to continue tracking it.</p><button type="button" class="button" id="check-publication">Check status</button>';
+    node.querySelector('#check-publication')?.addEventListener('click',()=>{progressFailures=0;followPublication(id).catch(error=>{if(node.isConnected)node.textContent=error.message;});});
+    return;
+   }
+   if(!node.isConnected||pending?.id!==id)return;
+   if(result.status==='failed')throw Error(result.error || 'Publication failed. Click Publish event to try again.');
+   node.innerHTML=result.status==='live'?'Event published. Awaiting super-admin approval.':loadingMarkup('Publishing your event');
+   if(result.status==='live'){
+    draft.clear();try { localStorage.removeItem(pendingKey); } catch { /* Publication is already complete. */ }pending=null;
+    const eventId=result.events[0]?.id;
+    if(eventId)location.hash=`${session?.admin?'admin/events':'issuer/manage'}/${eventId}`;
+    toast('Event published. Awaiting super-admin approval.');
+   } else ticketTimer=setTimeout(()=>followPublication(id).catch(error=>{if(node.isConnected)node.textContent=error.message;}),10000);
   }
-  let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{localStorage.removeItem(pendingKey);}
-  function resumePublication(payload) {
-   const status=form.querySelector('#publish-status');if(!status?.isConnected)return;
-   status.innerHTML='<p>Your publication is saved. Resume it or clear the saved draft to create a new event. Clearing the draft does not cancel a publication already queued; you can still track it in your studio.</p><div class="form-actions"><button type="button" id="resume-event" class="button button-light">Resume publication</button><button type="button" id="discard-publication" class="button button-light">Clear draft & start new</button></div>';
-   const discard=main.querySelector('#discard-publication');
-   discard.onclick=()=>{
-    clearTimeout(ticketTimer);localStorage.removeItem(pendingKey);
-    const notice=document.querySelector('#request-error');notice.hidden=true;notice.replaceChildren();
-    createEventPage();toast('Saved draft cleared. You can create a new event.');
-   };
-   main.querySelector('#resume-event').onclick=event=>busy(event.target,async()=>{
-    discard.disabled=true;
-    try {await post('/organizer/events',payload);await followPublication(payload.id);}
-    finally {if(discard.isConnected)discard.disabled=false;}
-   });
-  }
-  if(pending)resumePublication(pending);
   form.onsubmit=event=>{event.preventDefault();if(!form.isConnected)return;busy(form.querySelector('#publish-button'),async()=>{
    if(!form.reportValidity())return;await authenticate();
+   clearTimeout(ticketTimer);
    if(!form.isConnected)return;
-   if(localStorage.getItem(pendingKey))throw Error('Resume the saved publication or choose Clear draft & start new.');
    const f=form.elements,seconds=name=>Math.floor(new Date(f[name].value).getTime()/1000);
    if (![seconds('starts'),seconds('eventEnds'),seconds('mintStarts'),seconds('ends')].every(Number.isFinite) || seconds('starts') >= seconds('eventEnds') || seconds('mintStarts') >= seconds('ends')) {
      const message = 'Set an end time after the start for both the event and minting window.';
@@ -712,18 +717,23 @@ function createEventPage() {
    let artwork;try {artwork=await media();}catch(error){publishStatus.textContent=error.message;throw error;}
    if(!form.isConnected)return;
    const id=crypto.randomUUID();
-   const payload={id,title:f.title.value.trim(),description:f.description.value.trim(),club:f.club.value.trim(),category:f.category.value,campus:f.campus.value.trim(),venue:f.venue.value.trim(),approximateAttendees:Number(f.approximateAttendees.value),eventStartsAt:seconds('starts'),eventEndsAt:seconds('eventEnds'),mintStartsAt:seconds('mintStarts'),mintEndsAt:seconds('ends'),roleArtwork:artwork.roleArtwork};
+   const payload={id,title:f.title.value.trim(),description:f.description.value.trim(),club:f.club.value.trim(),category:f.category.value,campus:f.campus.value.trim(),venue:f.venue.value.trim(),approximateAttendees:Math.max(...artwork.roleArtwork.map(art=>art.cap)),eventStartsAt:seconds('starts'),eventEndsAt:seconds('eventEnds'),mintStartsAt:seconds('mintStarts'),mintEndsAt:seconds('ends'),roleArtwork:artwork.roleArtwork};
    if(payload.eventStartsAt>=payload.eventEndsAt||payload.mintStartsAt>=payload.mintEndsAt)throw Error('Check your event dates and minting window.');
-   // Save the id before sending, so an interrupted response can be resumed safely.
-   localStorage.setItem(pendingKey,JSON.stringify(payload));
+   // Reuse the same request only for an unchanged event; unrelated drafts never block publication.
+   if(pending && typeof pending.id==='string' && JSON.stringify({...pending,id:null})===JSON.stringify({...payload,id:null}))payload.id=pending.id;
+   pending=payload;
+   try { localStorage.setItem(pendingKey,JSON.stringify(payload)); } catch { /* Retries in this tab still reuse the submission ID. */ }
    const status=form.querySelector('#publish-status');status.innerHTML=loadingMarkup('Publishing your event');
-   try {await post('/organizer/events',payload);}catch(error){
-    if(error.status&&error.status<500||['CONTRACT_MISMATCH','RELAYER_MISMATCH','RELAYER_UNFUNDED','RELAYER_NOT_CONFIGURED','MEDIA_NOT_CONFIGURED','MEDIA_UNREACHABLE','MEDIA_MISMATCH','NOT_CONFIGURED'].includes(error.code)) {
-     localStorage.removeItem(pendingKey);if(status.isConnected)status.textContent=error.message;
-    } else resumePublication(payload);
+   try {await submitPublication(api,payload);}catch(error){
+    if(!uncertainPublication(error)) {
+     try { localStorage.removeItem(pendingKey); } catch { /* Keep the form retryable without browser storage. */ }
+     if(status.isConnected)status.textContent=error.message;
+     throw error;
+    }
+    if(status.isConnected)status.textContent='We could not confirm your submission yet. Your event details are preserved; check your connection and click Publish event again.';
     throw error;
    }
-   await followPublication(id);
+   await followPublication(payload.id);
   });};
 }
 
@@ -750,9 +760,9 @@ async function renderPage() {
   clearInterval(pageTimer); clearTimeout(ticketTimer); ticketView++; drawEvents = null; close();
   const version = ++renderId;
   const hash = location.hash.slice(1);
-  const routes = { events:'explore', gallery:'collection', organize:'studio', 'collector/gallery': 'explore', 'collector/collection': 'collection', 'collector/collectors': 'profile', 'builders/build': 'documentation', 'builders/documentation': 'documentation', 'issuer/guide': 'issuer-guide', 'issuer/studio': 'studio', 'issuer/manage': 'organizer' };
-  const route = hash.startsWith('issuer/manage/') ? 'organizer' : hash.startsWith('guide-') ? 'issuer-guide' : hash.startsWith('doc-') ? 'documentation' : routes[hash] || hash.split('/')[0];
-  const section = ['badge','profile'].includes(route) ? 'collection' : ['organizer','create','admin'].includes(route) ? 'studio' : route;
+  const routes = { events:'explore', gallery:'collection', organize:'studio', 'collector/gallery': 'explore', 'collector/collection': 'collection', 'collector/collectors': 'profile', 'builders/build': 'issuer-guide', 'builders/documentation': 'issuer-guide', 'issuer/guide': 'issuer-guide', 'issuer/studio': 'studio', 'issuer/manage': 'organizer' };
+  const route = hash.startsWith('issuer/manage/') ? 'organizer' : hash.startsWith('guide-') ? 'issuer-guide' : hash.startsWith('doc-') ? 'issuer-guide' : routes[hash] || hash.split('/')[0];
+  const section = ['badge','profile'].includes(route) ? 'collection' : ['organizer','create','admin','issuer-guide'].includes(route) ? 'studio' : route;
   all('.desktop-nav a, #mobile-nav a').forEach(link => {
     const target = link.getAttribute('href').slice(1);
     const active = (routes[target] || target.split('/')[0]) === section;
@@ -761,8 +771,9 @@ async function renderPage() {
   const home = !hash || ['main','collectibles','how-it-works'].includes(hash);
   document.querySelectorAll('[data-home]').forEach(node => { node.hidden = !home; });
   main.hidden = home;
+  if (home && !homeArtMounted) { homeArtMounted = true; mountHomeArt(document, window); }
   if (apiError && (home || ['explore','drop'].includes(route))) { main.hidden = false; main.innerHTML = `${empty('Live service unavailable', apiError)}<button class="button" id="retry-api">Retry connection</button>`; main.querySelector('button').onclick = init; return; }
-  if (home) { if (!homeArtMounted) { homeArtMounted = true; mountHomeArt(document, window); } renderCards(); pageTimer = setInterval(async () => { if (document.hidden || modal.open || version !== renderId) return; try { events = await api('/events'); apiError = ''; if (version === renderId) { connectionState(); renderCards(); } } catch (error) { apiError = error.message; renderCards(); } }, 15000); return; }
+  if (home) { renderCards(); pageTimer = setInterval(async () => { if (document.hidden || modal.open || version !== renderId) return; try { events = await api('/events'); apiError = ''; if (version === renderId) { connectionState(); renderCards(); } } catch (error) { apiError = error.message; renderCards(); } }, 15000); return; }
   if (route === 'collection' || route === 'badge' || route === 'profile') await collection(version, route === 'profile');
   else if (route === 'admin') {
     if(!session?.admin||hash==='admin/login') adminLogin();
@@ -775,7 +786,6 @@ async function renderPage() {
   else if (route === 'about') about();
   else if (route === 'issuer-guide') { main.innerHTML = issuerContent(); if (hash.startsWith('guide-')) document.getElementById(hash)?.scrollIntoView({behavior:reduced.matches ? 'instant' : 'smooth'}); }
   else if (route === 'studio') await organizerStudio(version,Boolean(session?.admin)&&hash==='organize');
-  else if (route === 'documentation') { documentation(); if (hash.startsWith('doc-')) document.getElementById(hash)?.scrollIntoView({behavior:reduced.matches ? 'instant' : 'smooth'}); }
   else if(route==='redeem') {
    const token=hash.split('/')[1];
    try {const result=await post('/redeem',{token});if(version===renderId)claimForm(result.event,true,token);}
@@ -803,15 +813,15 @@ async function renderPage() {
 
 function renderCards() {
   const grid = document.querySelector('#badge-grid');
-  const visible = events.filter(event => eventState(event) === 'Past event' && (filter === 'all' || (filter === 'art' ? event.category === 'Arts' : filter === 'community' ? event.category === 'Community' : event.category !== 'Arts' && event.category !== 'Community')));
+  const visible = events.filter(event => isPublicPastEvent(event) && (filter === 'all' || (filter === 'art' ? event.category === 'Arts' : filter === 'community' ? event.category === 'Community' : event.category !== 'Arts' && event.category !== 'Community')));
   grid.innerHTML = apiError ? empty('Live events unavailable', apiError) : visible.length ? visible.map(event => card(event)).join('') : empty(filter === 'all' ? 'No events yet' : 'No moments in this category yet', filter === 'all' ? 'Published events will appear here.' : 'Choose another category to explore more memories.');
-  const count = document.querySelector('[data-filter="all"] span'); if (count) count.textContent = events.filter(event => eventState(event) === 'Past event').length;
+  const count = document.querySelector('[data-filter="all"] span'); if (count) count.textContent = events.filter(event=>isPublicPastEvent(event)).length;
 }
 let filter = 'all';
 function explore() {
   main.innerHTML = `<h1 class="page-title">Discover events</h1><p class="lead">Find a moment worth keeping. Search by event, campus or organizer.</p><div class="discovery-filters"><label class="field">Search events<span class="event-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="live-search" type="search" placeholder="Event, campus, organizer…"></span></label><label class="field">Category<select id="live-category"><option>All events</option>${(config.categories || []).map(c => `<option>${esc(c)}</option>`).join('')}</select></label></div><p id="event-results" class="muted" role="status" aria-live="polite"></p><div id="live-events"></div>`;
   drawEvents = () => {
-    const visible = events.filter(e => matchesEvent(e, {search: main.querySelector('#live-search').value, category: main.querySelector('#live-category').value, period: 'all'}));
+    const visible = events.filter(e => isPublicPastEvent(e)&&matchesEvent(e, {search: main.querySelector('#live-search').value, category: main.querySelector('#live-category').value, period: 'all'}));
     main.querySelector('#event-results').textContent = `${visible.filter(event => eventState(event) === 'Past event').length} past events found`;
     main.querySelector('#live-events').innerHTML = [['Past event','Past events']].map(([state,label]) => {
       const rows = visible.filter(e => eventState(e) === state);
@@ -820,14 +830,15 @@ function explore() {
   };
   main.querySelector('#live-search').oninput = drawEvents; main.querySelector('#live-category').onchange = drawEvents; drawEvents();
 }
-function documentation() { main.innerHTML = documentationContent(); }
 async function init() {
   apiError = ''; document.querySelector('#request-error').hidden = true;
   try {
     const results = await Promise.allSettled([api('/events'), api('/config')]);
     if (results[0].status === 'fulfilled') events = results[0].value;
     if (results[1].status === 'fulfilled') config = results[1].value;
-    apiError = results.filter(result => result.status === 'rejected').map(result => result.reason.message).join(' ');
+    apiError = results[0].status === 'rejected' ? results[0].reason.message : '';
+    configError = results[1].status === 'rejected' ? results[1].reason.message : '';
+    if (configError) retryNotice(results[1].reason, init);
     const restored = await api('/auth/me').catch(() => null);
     if (restored?.wallet) { session = restored; connectedWallet = getAddress(restored.wallet); await walletClient.restore(restored.wallet); }
     walletHeader();
@@ -848,7 +859,7 @@ all('.filter-tab').forEach(button => button.addEventListener('click', () => {
   filter = button.dataset.filter;
   all('.filter-tab').forEach(tab => { tab.classList.toggle('active', tab === button); tab.setAttribute('aria-pressed', String(tab === button)); }); renderCards();
 }));
-$('#surprise-me')?.addEventListener('click', () => { const past = events.filter(event => eventState(event) === 'Past event'); if (past.length) showEvent(past[Math.floor(Math.random() * past.length)]); else toast('No past events available'); });
+$('#surprise-me')?.addEventListener('click', () => { const past = events.filter(event=>isPublicPastEvent(event)); if (past.length) showEvent(past[Math.floor(Math.random() * past.length)]); else toast('No past events available'); });
 const menu = $('.menu-button');
 function closeMenu(restoreFocus = false) {
   const wasOpen = menu?.getAttribute('aria-expanded') === 'true';
@@ -883,7 +894,7 @@ function connectionState() {
   const offline = !navigator.onLine;
   const stateNode = document.querySelector('#connection-state');
   if (stateNode) {
-    const wrong = Boolean(activeChain && activeChain !== chainHex());
+    const wrong = Boolean(activeChain && Number.isSafeInteger(config.chainId) && activeChain !== chainHex());
     stateNode.textContent = wrong ? `Your wallet is on another network. Use the header network button to switch to ${config.chainName}.` : offline ? 'Offline · live records and blockchain writes require connectivity.' : `${config.chainName || 'Configured'} development network · collectibles are testnet assets`;
     stateNode.hidden = !offline && !wrong;
   }
@@ -909,5 +920,5 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 document.querySelector('#install-app')?.addEventListener('click', async () => { await installPrompt?.prompt(); document.querySelector('#install-app').hidden = true; installPrompt = null; });
 
 $('.coin-fallback').innerHTML = badgeSvg('flower', 'fallback', 'GOOD TIMES GROW HERE');
+if (homeVisible()) { homeArtMounted = true; mountHomeArt(document, window); }
 init();
-document.addEventListener('poap-motion', event => { $('#pause-motion').setAttribute('aria-pressed', String(event.detail)); $('#pause-motion').setAttribute('aria-label', event.detail ? 'Resume animations' : 'Pause animations'); });

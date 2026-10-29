@@ -4,11 +4,11 @@ export class ApiError extends Error {
 
 export function createApiClient({fetchRequest = fetch, timeoutMs = 12000, wait = ms => new Promise(resolve => setTimeout(resolve,ms)), retryDelays = [350,1000]} = {}) {
   return async function request(path, options = {}) {
-    const {allowDegraded,quiet,...fetchOptions}=options;
+    const {allowDegraded,quiet,timeoutMs:requestTimeout=timeoutMs,...fetchOptions}=options;
     const get = (options.method || 'GET').toUpperCase() === 'GET';
     for (let attempt = 0; ; attempt++) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), requestTimeout);
       let failure;
       try {
         const response = await fetchRequest(`/api${path}`, {credentials:'same-origin',...fetchOptions,signal:controller.signal,
@@ -21,7 +21,8 @@ export function createApiClient({fetchRequest = fetch, timeoutMs = 12000, wait =
         const actionable=['ISSUER_NOT_AUTHORIZED','CONTRACT_MISMATCH','RELAYER_MISMATCH','RELAYER_UNFUNDED','RELAYER_NOT_CONFIGURED','MEDIA_NOT_CONFIGURED','MEDIA_UNREACHABLE','MEDIA_MISMATCH'].includes(code);
         const message = actionable ? data.error : response.status === 401 || code === 'WRONG_NETWORK'
           ? 'Your wallet or the network is wrong. Use Connect wallet or the network switch in the header.'
-          : response.status >= 500 ? `Kairo had a problem. Try again.${code === 'NOT_CONFIGURED' ? ' Its configuration needs attention.' : ''}`
+          : code === 'NOT_CONFIGURED' ? `Kairo configuration needs attention. ${data.error || 'The service administrator needs to finish setup.'}`
+          : response.status >= 500 ? 'Kairo had a problem. Try again.'
           : data.error || `Kairo could not complete this request (${response.status}).`;
         throw new ApiError(message,code,response.status);
       } catch (error) {

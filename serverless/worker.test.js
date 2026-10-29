@@ -60,7 +60,7 @@ test('admin can edit only off-chain text; badge and mint fields are rejected',as
  for(const frozen of [{uri:'changed'},{image:'changed'},{mintStartsAt:1},{mintEndsAt:2},{cap:100}])assert.equal((await f.request('/admin/events/1',{...input,...frozen},cookie)).status,400);
  assert.equal((await f.request('/admin/events/1',input,cookie)).status,200);assert.equal(f.sqlite.prepare('SELECT uri FROM events').get().uri,'ipfs://old');
 });
-test('direct publish freezes per-role metadata and creates a live event without review, resumes idempotently',async t=>{
+test('publication freezes metadata, awaits super-admin approval and retries idempotently',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.organizer),id=crypto.randomUUID();
  const media=await(await f.request('/artwork',{name:'Build together',description:'A day of community',role:'Attendee'},cookie)).json();
  const input={id,title:'Build together',description:'A day of community',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:50,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:50,...media}]};
@@ -70,7 +70,11 @@ test('direct publish freezes per-role metadata and creates a live event without 
  await actionNext(f.DB,f.chain);const signed=f.sqlite.prepare('SELECT raw_tx FROM chain_actions').get().raw_tx;assert.equal(signed,'publish');
  f.chain.signAction=async()=>{throw Error('Must not sign twice');};f.chain.receipt=async()=>({status:1});await actionNext(f.DB,f.chain);
  const progress=await(await f.request(`/publications/${id}`,undefined,cookie)).json();assert.equal(progress.status,'live');assert.equal(progress.events[0].id,2);
- const event=(await(await f.request('/events')).json()).find(e=>e.id===2);assert.equal(event.title,input.title);assert.equal(event.organizer,f.organizer.address);
+ assert.equal((await(await f.request('/events')).json()).some(e=>e.id===2),false);
+ const event=(await(await f.request('/organizer/events',undefined,cookie)).json()).events.find(e=>e.id===2);assert.equal(event.title,input.title);assert.equal(event.organizer,f.organizer.address);assert.equal(event.approval,'pending');
+ const approved=await f.login(f.admin);assert.equal((await f.request('/admin/events/2',{action:'verify'},approved)).status,200);
+ assert.equal(f.sqlite.prepare('SELECT approval FROM events WHERE id=2').get().approval,'approved');
+ assert.equal((await(await f.request('/events')).json()).some(e=>e.id===2),true);
  assert.equal(f.sqlite.prepare("SELECT name FROM sqlite_master WHERE name='organizer_drafts'").get(),undefined);
 });
 test('RSVP, check-in, draft review, registration, and old ticket endpoints do not exist',async t=>{
@@ -508,4 +512,52 @@ test('an unsigned resume queued before deletion cannot reopen the event',async t
  assert.equal(f.sqlite.prepare("SELECT status FROM chain_actions WHERE payload LIKE '%false%'").get().status,'failed');
  assert.equal(signed,0);
  await actionNext(f.DB,f.chain);assert.equal(signed,1);
+});
+
+test('an organizer can track their saved publication without an admin RPC check; others remain denied',async t=>{
+ t.mock.method(console,'error',()=>{});
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.organizer),id=crypto.randomUUID();
+ f.sqlite.prepare("INSERT INTO chain_actions(id,wallet,kind,payload,created_at) VALUES(?,?,'publish','{}',?)").run(id,f.organizer.address,f.seconds);
+ f.chain.assertContract=async()=>{throw Error('Admin RPC unavailable');};
+ const response=await f.request(`/publications/${id}`,undefined,cookie);assert.equal(response.status,200);assert.equal((await response.json()).id,id);
+ const stranger=await f.login(f.outsider);const denied=await f.request(`/publications/${id}`,undefined,stranger);assert.notEqual(denied.status,200);assert.equal((await denied.json()).id,undefined);
+});
+
+test('configured super admin keeps a verification entry during RPC failure without gaining unverified access',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const cookie=await f.login(f.admin);
+ f.chain.assertContract=async()=>{throw Error('RPC unavailable');};
+ const me=await(await f.request('/auth/me',undefined,cookie)).json();
+ assert.equal(me.admin,false);assert.equal(me.superAdmin,false);assert.equal(me.adminUnavailable,true);
+ const stranger=await f.login(f.outsider);assert.equal((await(await f.request('/auth/me',undefined,stranger)).json()).adminUnavailable,false);
+});
+
+test('missing local publishing credentials fail before public artwork fetch or chain submission',async t=>{
+ t.mock.method(console,'error',()=>{});
+ const f=fixture('http://localhost:8787');t.after(()=>f.sqlite.close());f.env.MEDIA_BASE_URL='https://art.r2.dev/';const cookie=await f.login(f.organizer);
+ const media=await(await f.request('/artwork',{name:'Local workshop',description:'A day together',role:'Attendee'},cookie)).json();
+ delete f.env.ISSUER_PRIVATE_KEY;let fetches=0;t.mock.method(globalThis,'fetch',async()=>{fetches++;throw Error('Must not fetch');});
+ const input={id:crypto.randomUUID(),title:'Local workshop',description:'A day together',club:'Code club',category:'Technology',venue:'Hall A',approximateAttendees:20,eventStartsAt:f.seconds,eventEndsAt:f.seconds+100,mintStartsAt:f.seconds,mintEndsAt:f.seconds+3600,roleArtwork:[{role:'Attendee',cap:20,...media}]};
+ const response=await f.request('/organizer/events',input,cookie),error=await response.json();
+ assert.equal(response.status,503);assert.equal(error.code,'RELAYER_NOT_CONFIGURED');assert.match(error.error,/relayer private key/);
+ assert.equal(fetches,0);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM chain_actions').get().n,0);
+});
+
+test('the configured supreme admin can accept and reject another wallet’s events while organizers cannot',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());
+ const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ const supreme=config.vars.SUPER_ADMIN_ADDRESS;
+ assert.equal(supreme,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE');
+ assert.equal(config.secrets.required.includes('SUPER_ADMIN_ADDRESS'),false);
+ f.env.SUPER_ADMIN_ADDRESS=supreme;f.chain.currentSuperAdmin=supreme;
+ const cookie=await f.login({address:supreme});
+ const me=await(await f.request('/auth/me',undefined,cookie)).json();
+ assert.equal(me.wallet,supreme);assert.equal(me.admin,true);assert.equal(me.superAdmin,true);
+ assert.notEqual(f.sqlite.prepare('SELECT organizer FROM events WHERE id=1').get().organizer,supreme);
+ assert.equal((await f.request('/admin/events/1',{action:'verify'},cookie)).status,200);
+ assert.equal(f.sqlite.prepare('SELECT approval FROM events WHERE id=1').get().approval,'approved');
+ assert.equal((await f.request('/admin/events/1',{action:'reject',reason:'Please correct the venue.'},cookie)).status,202);
+ assert.equal(f.sqlite.prepare('SELECT approval FROM events WHERE id=1').get().approval,'rejected');
+ const organizer=await f.login(f.organizer);
+ assert.equal((await f.request('/admin/events/1',{action:'verify'},organizer)).status,403);
+ assert.equal(f.sqlite.prepare('SELECT approval FROM events WHERE id=1').get().approval,'rejected');
 });

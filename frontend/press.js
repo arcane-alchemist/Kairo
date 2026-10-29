@@ -5,7 +5,7 @@ import * as k from './vendor/anatomy/iso-kit.mjs';
 // 4 die screws, 2 rail strips, ruler, label, 2 controls, and 7 vent slots.
 export function pressGeometry() {
   const base = { x: -95, y: -60, w: 190, d: 120, r: 9 };
-  const P = k.fitProjection([...k.boxCorners(base, -17, 0), ...k.boxCorners({ x: -68, y: -35, w: 136, d: 70, r: 4 }, 0, 136)], 600, 420, { pad: 43, azimuth: 38, elevation: 28 });
+  const P = k.fitProjection([...k.boxCorners(base, -17, 0), ...k.boxCorners({ x: -68, y: -35, w: 136, d: 70, r: 4 }, 0, 136)], 600, 420, { pad: 24, azimuth: 38, elevation: 28 });
   const S = (paths, tone = 'mid', lit = false) => k.solidSvg(paths, { tone, lit });
   const L = (path, tone = 'lo', free = false) => k.lineSvg(path, { tone, free });
   const dot = (x, y, z, size = .65) => k.dotsSvg([k.iso([x, y, z], P)], { size, tone: 'hi' });

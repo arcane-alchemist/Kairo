@@ -1,5 +1,5 @@
 const key = 'kairo-event-draft';
-const fields = ['title', 'club', 'description', 'category', 'campus', 'roles', 'venue', 'starts', 'eventEnds', 'mintStarts', 'ends', 'approximateAttendees'];
+const fields = ['title', 'club', 'description', 'category', 'campus', 'roles', 'venue', 'starts', 'eventEnds', 'mintStarts', 'ends'];
 
 // Tab-scoped text only: never persist uploaded files, recipient lists or wallet data.
 export function preserveEventDraft(form, storage, status) {

@@ -33,3 +33,18 @@ test('publishing setup errors retain their actionable message and quiet is never
  await assert.rejects(request('/organizer/events',{method:'POST',quiet:true}),error=>error.message==='Use the key matching the configured relayer.');
  assert.equal(sent.quiet,undefined);
 });
+
+test('missing configuration reports the safe server diagnostic instead of an opaque generic error',async()=>{
+ const api=createApiClient({fetchRequest:async()=>Response.json({code:'NOT_CONFIGURED',error:'Kairo configuration is missing: SUPER_ADMIN_ADDRESS.'},{status:503})});
+ await assert.rejects(api('/config'),error=>error.code==='NOT_CONFIGURED'&&error.message.includes('SUPER_ADMIN_ADDRESS'));
+});
+
+test('publication may extend its timeout without forwarding timeout configuration to fetch',async()=>{
+ const request=createApiClient({timeoutMs:1,fetchRequest:async(path,options)=>{
+  assert.equal(options.timeoutMs,undefined);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(options.signal.aborted,false);
+  return Response.json({status:'pending'});
+ }});
+ assert.equal((await request('/organizer/events',{method:'POST',timeoutMs:50})).status,'pending');
+});

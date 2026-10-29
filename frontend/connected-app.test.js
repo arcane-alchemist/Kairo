@@ -9,12 +9,13 @@ import {createApiClient as realApiClient} from './api.js';
 import {csv} from '../serverless/claims.js';
 import {ABI} from '../serverless/chain.js';
 import {metaMaskWallet} from './wallet.js';
-import {aboutContent,documentationContent,issuerContent,doodle} from './content.js';
-import {eventState, matchesEvent, profileStats, filterCollection, groupCollection} from './student-model.js';
+import {aboutContent,issuerContent,doodle} from './content.js';
+import {eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollection, groupCollection} from './student-model.js';
 import {createPageLoader} from './page-loader.js';
 import {preserveEventDraft} from './event-draft.js';
+import {submitPublication,uncertainPublication} from './publication.js';
 
-async function setup({hash = '', failure = false, events = [], ethereum, phantom, respond, Contract} = {}) {
+async function setup({hash = '', failure = false, events = [], ethereum, phantom, privy, respond, Contract} = {}) {
   const {document, window} = parseHTML(readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8'));
   Object.defineProperty(document, 'readyState', {value: 'complete'});
   Object.defineProperty(window.HTMLImageElement.prototype, 'complete', {configurable: true, get: () => true});
@@ -24,10 +25,11 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   const location = {hash, href: 'https://kairo.test/' + hash, origin: 'https://kairo.test', protocol: 'https:', hostname: 'kairo.test'};
   for (const dialog of document.querySelectorAll('dialog')) { dialog.showModal = () => {dialog.open = true;}; dialog.close = () => {dialog.open = false;dialog.dispatchEvent(new window.Event('close'));}; }
   window.ethereum = ethereum;
+  window.kairoPrivy = privy;
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    installPrivy(){}, preserveEventDraft, mountHomeArt(){}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    installPrivy(){}, preserveEventDraft, submitPublication, uncertainPublication, homeArtCalls:0, mountHomeArt(){context.homeArtCalls++;}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, issuerContent, doodle, eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -73,7 +75,7 @@ test('a slow session restore keeps the loader visible and renders the latest URL
   ui.location.hash='#builders/documentation'; await ui.render();
   assert.equal(ui.document.querySelector('#page-loader').hidden,false);
   restore({}); await new Promise(resolve=>setImmediate(resolve));
-  assert.match(ui.document.querySelector('#live-app').textContent,/GET \/api\/health/);
+  assert.match(ui.document.querySelector('#live-app').textContent,/Organizer guide/);
   assert([...ui.document.querySelectorAll('[data-home]')].every(node=>node.hidden));
   assert.equal(ui.document.querySelector('#page-loader').hidden,true);
 });
@@ -86,7 +88,7 @@ test('page load checks the session cookie without requesting wallet accounts',as
 test('organizer studio uses the shared session and documentation chapter links keep the docs visible',async()=>{
   const ui=await setup({hash:'#issuer/studio'});assert.equal(ui.document.querySelector('#studio-connect'),null);assert.match(ui.document.querySelector('#live-app').textContent,/Organizer studio/);
   ui.location.hash='#builders/documentation';await ui.render();assert.equal(ui.document.querySelectorAll('.docs-copy section').length,7);
-  assert.match(ui.document.querySelector('#live-app').textContent,/GET \/api\/health/);
+  assert.match(ui.document.querySelector('#live-app').textContent,/Organizer guide/);
 });
 
 
@@ -136,9 +138,9 @@ test('MetaMask spam block shows a safe sign-in error and a manual retry reuses a
 test('a reload restores the signed session UI without calling a wallet extension',async()=>{
  const calls=[],address='0x1111111111111111111111111111111111111111';
  const ui=await setup({ethereum:{isMetaMask:true,request:async({method})=>calls.push(method)},respond:path=>path==='/api/auth/me'?{wallet:address,admin:false}:undefined});
- assert.match(ui.document.querySelector('#wallet').textContent,/0x1111/);assert.deepEqual(calls,[]);assert.equal(ui.document.querySelector('#wallet-welcome').hidden,true);
+ assert.match(ui.document.querySelector('#wallet').textContent,/0x1111/);assert.deepEqual(calls,[]);assert.equal(ui.document.querySelector('#wallet-welcome'),null);
 });
-test('the Builders legacy build route opens developer information, never an event form',async()=>{
+test('the Builders legacy build route opens the organizer guide, never an event form',async()=>{
  const ui=await setup({hash:'#builders/build'});assert(ui.document.querySelector('.docs-copy'));assert.equal(ui.document.querySelector('#event-form'),null);
 });
 test('untrusted event text, IDs, artwork URLs and collection routes cannot inject active HTML',async()=>{
@@ -241,7 +243,7 @@ test('subpages provide top-left links back to studio or About even during an eve
  const ui=await setup({hash:'#issuer/manage'});assert.equal(ui.document.querySelector('.back-link').getAttribute('href'),'#issuer/studio');
  ui.location.hash='#issuer/guide';await ui.render();assert.equal(ui.document.querySelector('.back-link').getAttribute('href'),'#issuer/studio');
  ui.location.hash='#about/case-studies';await ui.render();assert.equal(ui.document.querySelector('.back-link').getAttribute('href'),'#about/proof');
- vm.runInContext("apiError='Service down'",ui.context);ui.location.hash='#builders/documentation';await ui.render();assert(ui.document.querySelector('#doc-design'));
+ vm.runInContext("apiError='Service down'",ui.context);ui.location.hash='#builders/documentation';await ui.render();assert(ui.document.querySelector('#guide-design'));
 });
 
 test('each role accepts an independent custom upload and clearing it removes only that preview',async()=>{
@@ -257,7 +259,7 @@ test('each role accepts an independent custom upload and clearing it removes onl
  assert(!ui.requests.some(([path])=>path==='/api/artwork'));
 });
 
-test('homepage connection is shared by Gallery and Organize without repeat prompts',async()=>{
+test('header connection is shared by Gallery and Organize without repeat prompts',async()=>{
  const wallet='0x1111111111111111111111111111111111111111';let signedIn=false,signatures=0;
  const ui=await setup({ethereum:{isMetaMask:true,request:async({method})=>['eth_requestAccounts','eth_accounts'].includes(method)?[wallet]:'0xaa36a7'},respond:(path)=>{
   if(path==='/api/auth/me')return signedIn?{wallet,admin:false}:new Response('{}',{status:401});
@@ -266,9 +268,9 @@ test('homepage connection is shared by Gallery and Organize without repeat promp
   if(path==='/api/wallet-collection?wallet='+wallet+'&cursor=1')return {total:0,pending:0,nextCursor:null,items:[]};
   if(path.startsWith('/api/organizer/events'))return {events:[],publications:[]};
  }});
- assert.equal(ui.document.querySelector('#wallet-welcome').hidden,false);
- const pending=ui.document.querySelector('#home-connect').onclick();await pending;
- assert.equal(ui.document.querySelector('#wallet-welcome').hidden,true);assert.equal(signatures,1);
+ assert.equal(ui.document.querySelector('#home-connect'),null);
+ const pending=ui.document.querySelector('#wallet').onclick();await pending;
+ assert.equal(ui.document.querySelector('#wallet-welcome'),null);assert.equal(signatures,1);
  for(const hash of ['#gallery','#organize','#issuer/manage']) {
   ui.location.hash=hash;await ui.render();
   assert.equal(ui.document.querySelector('#gallery-connect,#studio-connect,#organizer-connect'),null);
@@ -286,7 +288,7 @@ test('any signed-in organizer directly publishes distinct generated roles and re
  }});
  vm.runInContext("session={wallet:'0x1111111111111111111111111111111111111111',admin:false}; createEventPage()",ui.context);
  const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
- for(const [key,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee, Judge',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[key],'value',{configurable:true,writable:true,value});
+ for(const [key,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee, Judge',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[key],'value',{configurable:true,writable:true,value});
  assert.equal(form.elements.organizer,undefined);assert.equal(ui.document.querySelector('#submit-event'),null);
  form.elements.roles.oninput();
  for(let i=0;i<2;i++){const generate=ui.document.querySelector(`[data-generate-role="${i}"]`);await generate.onclick({target:generate});}
@@ -295,6 +297,10 @@ test('any signed-in organizer directly publishes distinct generated roles and re
  const payload=JSON.parse(posts[0][1].body);assert.deepEqual(payload.roleArtwork.map(art=>art.role),['Attendee','Judge']);assert.equal(new Set(payload.roleArtwork.map(art=>art.uri)).size,2);
  for(const name of ['submit','draftId','rsvpDeadline','wallet','organizer'])assert.equal(name in payload,false);
  assert.equal(ui.location.hash,'issuer/manage/7');assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);
+ assert.match(ui.document.querySelector('#toast').textContent,/Awaiting super-admin approval/);
+ assert.equal(payload.approximateAttendees,50);
+ for(const selector of ['[name="approximateAttendees"]','#clear-artwork','#resume-event','#discard-publication'])assert.equal(form.querySelector(selector),null);
+ assert.doesNotMatch(form.textContent,/Use artwork you have permission|Your publication is saved|Publish immediately with sponsored gas/);
 });
 
 test('superadmin Activity is separate from request review and shows gas, network and audit',async()=>{
@@ -354,7 +360,7 @@ test('contract setup problems remain visible while network connectivity is shown
   if(path==='/api/admin/audit')return {rows:[],hasMore:false};
  }});
  assert.match(ui.document.querySelector('.setup-note').textContent,/Connect the updated contract/);
- assert.match(ui.document.querySelector('.service-details').textContent,/Sepolia connectionAvailable/);
+ assert.equal(ui.document.querySelector('.service-details'),null);
  assert.equal(ui.document.querySelector('#request-error').hidden,true);
  assert.equal(ui.document.querySelector('#studio-events'),null);
 });
@@ -371,7 +377,7 @@ test('studio pagination appears only when another events page exists',async()=>{
  assert.match(ui.document.querySelector('.page-controls button').textContent,/Previous/);
 });
 
-test('a contract setup failure leaves the form retryable; an uncertain request exposes safe resume',async()=>{
+test('Publish event retries setup failures and uncertain submissions without separate resume controls',async()=>{
  for(const failure of ['CONTRACT_MISMATCH','UNREACHABLE']) {
   let fail=true;const payloads=[];
   const ui=await setup({respond:(path,options)=>{
@@ -385,14 +391,16 @@ test('a contract setup failure leaves the form retryable; an uncertain request e
   }});
   vm.runInContext("session={wallet:'0x1111111111111111111111111111111111111111',admin:false}; createEventPage()",ui.context);
   const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
-  for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
+  for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
   const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});
   form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
   if(failure==='CONTRACT_MISMATCH'){
    assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);assert.match(ui.document.querySelector('#publish-status').textContent,/Update the Kairo contract/);
    form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
   }else {
-   const resume=ui.document.querySelector('#resume-event');assert(resume);await resume.onclick({target:resume});assert.equal(payloads[0].id,payloads[1].id);
+   assert.equal(ui.document.querySelector('#resume-event'),null);
+   assert.equal(payloads.length,1);assert.equal(ui.location.hash,'issuer/manage/7');
+   assert.doesNotMatch(ui.document.querySelector('#publish-status').textContent,/Connection interrupted/);
   }
   assert.equal(ui.location.hash,'issuer/manage/7');assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);
  }
@@ -406,19 +414,20 @@ test('studio event IDs, role names and titles cannot inject active attributes',a
  assert.equal(ui.document.querySelector('#live-app [onclick],#live-app [onerror],#live-app script'),null);
 });
 
-test('super admin has a separate MetaMask login and organizer studio hides system tools',async()=>{
+test('wallet connection uses Privy for everyone and organizer studio hides system tools',async()=>{
  const login=await setup({hash:'#admin/login'});
  assert(login.document.querySelector('#admin-sign-in'));
- assert.match(login.document.querySelector('#live-app').textContent,/No private key or password/);
+ assert.match(login.document.querySelector('#live-app').textContent,/Use Privy to connect your wallet/);
  assert.equal(login.requests.some(([path])=>path.startsWith('/api/admin/')),false);
  const denied=await setup({hash:'#admin',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111',admin:false}:undefined});
- assert.match(denied.document.querySelector('#live-app').textContent,/no panel access/);
+ assert.match(denied.document.querySelector('#live-app').textContent,/Use Privy to connect your wallet/);
+ assert.doesNotMatch(denied.document.querySelector('#live-app').textContent,/superadmin and wallets granted panel access/);
  assert.equal(denied.requests.some(([path])=>path.startsWith('/api/admin/')),false);
  const studio=await setup({hash:'#issuer/studio',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111',admin:true}:undefined});
  assert.equal(studio.document.querySelector('#studio-system'),null);
 });
 
-test('a published organizer event exposes rotating QR and single-use links with CSV and mail controls',async()=>{
+test('an approved organizer event exposes a public mint link and preserves recipient export controls',async()=>{
  const now=Math.floor(Date.now()/1000),event={id:7,title:'Campus workshop',description:'A coding workshop',roles:['Attendee'],listed:true,paused:false,mintStartsAt:now-60,mintEndsAt:now+3600};
  const ui=await setup({hash:'#issuer/manage/7',respond:(path,options)=>{
   if(path==='/api/auth/me')return {wallet:'0x1111111111111111111111111111111111111111',admin:false};
@@ -428,15 +437,12 @@ test('a published organizer event exposes rotating QR and single-use links with 
   if(path.startsWith('/api/events/7/links'))return options?.method==='POST'?{links:[{email:'guest@example.org',role:'Attendee',link:'https://kairo.test/#redeem/single-use-token'}],merged:0}:{rows:[],hasMore:false};
   if(path==='/api/events/7/qr')return {token:'signed-rotating-token'};
  }});
- const walkIn=ui.document.querySelector('#walk-in');assert(walkIn,ui.document.querySelector('#live-app').textContent);assert.equal(walkIn.disabled,false);
- await vm.runInContext('shareDrop('+JSON.stringify(event)+')',ui.context);
- assert(ui.document.querySelector('#drop-qr'));assert.match(ui.document.querySelector('#qr-status').textContent,/Live QR/);
- assert(ui.requests.some(([path])=>path==='/api/events/7/qr'));
+ assert(ui.document.querySelector('#public-mint-link'));assert.equal(ui.document.querySelector('#walk-in'),null);
  const form=ui.document.querySelector('#recipients-form');form.elements.recipients.value='email,role\nguest@example.org,Attendee';form.onsubmit({preventDefault(){}});
  await new Promise(resolve=>setImmediate(resolve));
  assert(ui.document.querySelector('#export-links'));assert(ui.document.querySelector('[data-copy-link]'));
  assert.match(ui.document.querySelector('#issued-links a').getAttribute('href'),/^mailto:guest%40example.org/);
- event.paused=true;await ui.render();assert.equal(ui.document.querySelector('#walk-in').disabled,true);
+ event.paused=true;await ui.render();assert.equal(ui.document.querySelector('#walk-in'),null);
 });
 
 test('event creator can edit and delete a published event from their workspace',async()=>{
@@ -545,7 +551,7 @@ test('admin background refresh preserves an address being typed and manual refre
  paused=true;await content.querySelector('#refresh-dashboard').onclick();assert.equal(content.querySelector('#direct-mint button').disabled,true);assert.match(content.textContent,/Minting is paused/);
 });
 
-test('clearing a saved publication resets the editor and permits a fresh publication ID',async()=>{
+test('an unrelated saved publication never blocks publishing a new event',async()=>{
  const oldId=crypto.randomUUID(),payloads=[];
  const ui=await setup({respond:(path,options)=>{
   if(path==='/api/artwork')return {image:'https://kairo.test/media/art/badge.svg',uri:'https://kairo.test/media/metadata/badge.json'};
@@ -553,11 +559,9 @@ test('clearing a saved publication resets the editor and permits a fresh publica
   if(path.startsWith('/api/publications/'))return {status:'pending',events:[]};
  }});
  vm.runInContext(`session={wallet:'0x1111111111111111111111111111111111111111',admin:false};localStorage.setItem('kairo-publishing',JSON.stringify({id:'${oldId}'}));createEventPage()`,ui.context);
- ui.document.querySelector('#event-form').elements.title.value='Old draft';
- ui.document.querySelector('#discard-publication').onclick();
- assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);assert.equal(ui.document.querySelector('#resume-event'),null);assert.equal(payloads.length,0);assert.equal(ui.document.querySelector('#request-error').hidden,true);
- const form=ui.document.querySelector('#event-form');assert.equal(form.elements.title.value,'');form.reportValidity=()=>true;
- for(const [name,value]of Object.entries({title:'New campus workshop',description:'A new coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
+ const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
+ assert.equal(ui.document.querySelector('#discard-publication, #resume-event'),null);
+ for(const [name,value]of Object.entries({title:'New campus workshop',description:'A new coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
  const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});
  form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(payloads.length,1);assert.notEqual(payloads[0].id,oldId);assert.equal(payloads[0].title,'New campus workshop');
@@ -617,9 +621,9 @@ test('superadmin publication completion opens its event request dashboard automa
   if(path.startsWith('/api/publications/'))return {status:'live',events:[{id:7}]};
  }});
  vm.runInContext("session={wallet:'0x1111111111111111111111111111111111111111',admin:true};createEventPage()",ui.context);
- assert(ui.document.querySelector('#live-app a[href="#admin/events"]'));
+ assert.equal(ui.document.querySelector('#event-form .notice'),null);
  const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
- for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop',club:'Code club',category:'Workshop',campus:'Campus',roles:'Attendee',venue:'Hall A',approximateAttendees:'20',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
+ for(const [name,value]of Object.entries({title:'Campus workshop',description:'A coding workshop',club:'Code club',category:'Workshop',campus:'Campus',roles:'Attendee',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
  const generate=ui.document.querySelector('[data-generate-role]');await generate.onclick({target:generate});form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(ui.location.hash,'admin/events/7');assert.equal(vm.runInContext("localStorage.getItem('kairo-publishing')",ui.context),null);
 });
@@ -824,9 +828,141 @@ test('an in-flight background dashboard refresh cannot overwrite newly entered f
 });
 
 test('navigation identifies the current section across gallery aliases and documentation chapters',async()=>{
- for(const [hash,destination] of [['#collector/collection','#gallery'],['#doc-api','#builders/documentation'],['#create','#organize']]){
+ for(const [hash,destination] of [['#collector/collection','#gallery'],['#doc-api','#organize'],['#create','#organize']]){
   const ui=await setup({hash});
   for(const selector of ['.desktop-nav','#mobile-nav'])assert.equal(ui.document.querySelector(`${selector} a[aria-current="page"]`).getAttribute('href'),destination);
   assert.match(ui.document.title,/Kairo/);
  }
+});
+
+test('published events show pending approval and keep mint controls disabled until super-admin approval',async()=>{
+ const address='0x1111111111111111111111111111111111111111',now=Math.floor(Date.now()/1000);
+ const event={id:7,title:'Workshop',roles:['Attendee'],organizer:address,listed:true,approval:'pending',startsAt:now-10,endsAt:now+3600,mintStartsAt:now-10,mintEndsAt:now+3600};
+ const ui=await setup({hash:'#issuer/manage/7',respond:path=>{
+  if(path==='/api/auth/me')return {wallet:address};
+  if(path.startsWith('/api/organizer/events'))return {events:[event],publications:[],hasMore:false};
+  if(path==='/api/events/7/dashboard')return {event,capRemaining:50};
+  if(path.startsWith('/api/events/7/transactions')||path.startsWith('/api/events/7/links'))return {rows:[],hasMore:false};
+ }});
+ const content=ui.document.querySelector('#staff-content');
+ assert.match(content.querySelector('[role="status"]').textContent,/Awaiting super-admin approval/);
+ assert.equal(content.querySelector('#public-mint-link'),null);
+ event.approval='approved';await content.querySelector('#refresh-dashboard').onclick();
+ assert(content.querySelector('#public-mint-link'));
+ let copied;ui.context.navigator.clipboard={writeText:async value=>{copied=value;}};
+ await content.querySelector('#copy-public-mint-link').onclick();assert.equal(copied,'https://kairo.test/#drop/7');
+ assert.doesNotMatch(content.textContent,/Awaiting super-admin approval/);
+});
+
+test('homepage artwork initializes once even when every API request fails',async()=>{
+ const ui=await setup({failure:true});
+ assert.equal(ui.context.homeArtCalls,1);
+ assert(ui.document.querySelector('#press-art #press-head'));
+ assert.match(ui.document.querySelector('#live-app').textContent,/Live service unavailable/);
+ ui.location.hash='#about/proof';await ui.render();ui.location.hash='';await ui.render();
+ assert.equal(ui.context.homeArtCalls,1);
+});
+
+test('configuration outages do not hide successfully loaded discovery records',async()=>{
+ const ui=await setup({events:[{id:7,title:'Available past workshop',roles:['Attendee'],startsAt:1,endsAt:2}],respond:path=>path==='/api/config'?Response.json({code:'NOT_CONFIGURED',error:'Missing configuration.'},{status:503}):undefined});
+ assert.match(ui.document.querySelector('#badge-grid').textContent,/Available past workshop/);
+ assert.equal(ui.document.querySelector('#live-app').hidden,true);
+ assert.equal(ui.document.querySelector('#request-error').hidden,false);
+ assert.equal(ui.context.homeArtCalls,1);
+});
+
+test('Connect wallet recovers network settings before requesting account access after a config outage',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',steps=[];let configs=0,signedIn=false;
+ const ui=await setup({ethereum:{isMetaMask:true,request:async({method})=>{
+  steps.push(method);if(method==='eth_requestAccounts'||method==='eth_accounts')return [wallet];if(method==='eth_chainId')return '0xaa36a7';return [];
+ }},respond:(path,options)=>{
+  if(path==='/api/config'){steps.push('config');return ++configs===1?Response.json({code:'NOT_CONFIGURED'},{status:503}):{chainId:11155111,chainName:'Sepolia',categories:[]};}
+  if(path==='/api/auth/challenge')return {id:'challenge',message:'Sign in'};
+  if(path==='/api/auth/verify'){signedIn=true;return {};}
+  if(path==='/api/auth/me')return signedIn?{wallet}:{};
+ }});
+ assert.equal(steps.includes('eth_requestAccounts'),false);
+ await ui.document.querySelector('#wallet').onclick();
+ assert.equal(configs,2);assert(steps.lastIndexOf('config')<steps.findIndex(step=>step!=='config'));
+ assert.match(ui.document.querySelector('#wallet').textContent,/0x1111/);
+ assert.doesNotMatch(ui.document.querySelector('#toast').textContent,/network configuration is unavailable/);
+ assert.equal(ui.document.querySelector('#request-error').hidden,true);
+});
+
+test('an accepted event survives a temporary status outage and finishes awaiting super-admin approval',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';let unavailable=true,posts=0;
+ const ui=await setup({hash:'#create',respond:(path,options)=>{
+  if(path==='/api/auth/me')return {wallet};
+  if(path==='/api/artwork')return {image:'https://kairo.test/media/art/badge.svg',uri:'https://kairo.test/media/metadata/badge.json'};
+  if(path==='/api/organizer/events'&&options.method==='POST'){posts++;return {status:'pending'};}
+  if(path.startsWith('/api/publications/'))return unavailable?Response.json({code:'RPC_UNREACHABLE'},{status:503}):{status:'live',events:[{id:7}]};
+ }});
+ const timers=[];ui.context.setTimeout=(fn,ms)=>{if(ms===10000)timers.push(fn);return 1;};
+ const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
+ for(const [name,value]of Object.entries({title:'Campus workshop',description:'A day of learning',club:'Code club',category:'Workshop',campus:'Main campus',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[name],'value',{configurable:true,writable:true,value});
+ const generate=form.querySelector('[data-generate-role]');await generate.onclick({target:generate});
+ form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(posts,1);assert.match(form.querySelector('#publish-status').textContent,/Checking publication progress/);
+ assert.equal(ui.document.querySelector('#request-error').hidden,true);assert.equal(timers.length,1);
+ unavailable=false;await timers[0]();
+ assert.equal(posts,1);assert.equal(ui.location.hash,'issuer/manage/7');
+ assert.match(ui.document.querySelector('#toast').textContent,/Awaiting super-admin approval/);
+});
+
+test('a configured admin can find the panel and retry verification without signing in again',async()=>{
+ const wallet='0x4CB1E99035D2812472B2d50DBB590E9C593188bE';let verified=false;
+ const ui=await setup({hash:'#admin/login',respond:path=>{
+  if(path==='/api/auth/me')return {wallet,admin:verified,superAdmin:verified,adminUnavailable:!verified};
+  if(path==='/api/config')return {chainId:11155111,chainName:'Sepolia',superAdminAddress:wallet,categories:[]};
+ }});
+ assert.equal(ui.document.querySelector('#admin-profile').hidden,false);
+ assert.match(ui.document.querySelector('#admin-profile').textContent,/verification is unavailable/);
+ assert.match(ui.document.querySelector('#admin-sign-in').textContent,/Retry admin verification/);
+ verified=true;const button=ui.document.querySelector('#admin-sign-in');await button.onclick({target:button});
+ assert.equal(ui.location.hash,'#admin');assert.equal(ui.requests.some(([path])=>path==='/api/auth/challenge'),false);
+ assert.match(ui.document.querySelector('#studio-events').textContent,/first event/);
+});
+
+test('admin event approval controls are visible above participant minting and submit accept/reject actions',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',actions=[],now=Math.floor(Date.now()/1000);
+ const event={id:7,title:'Pending workshop',description:'A day together',organizer:wallet,roles:['Attendee'],listed:true,approval:'pending',venue:'Hall A',startsAt:now-10,endsAt:now+3600,mintStartsAt:now-10,mintEndsAt:now+3600};
+ const ui=await setup({hash:'#admin/events/7',respond:(path,options)=>{
+  if(path==='/api/auth/me')return {wallet,admin:true,superAdmin:true};
+  if(path.startsWith('/api/admin/events?page'))return {events:[event],publications:[],hasMore:false};
+  if(path==='/api/events/7/dashboard')return {event,capRemaining:20};
+  if(path.startsWith('/api/events/7/transactions')||path.startsWith('/api/events/7/links')||path.startsWith('/api/events/7/requests'))return {rows:[],hasMore:false};
+  if(path==='/api/admin/events/7'&&options.method==='POST'){actions.push(JSON.parse(options.body));return {status:'saved'};}
+ }});
+ let panel=ui.document.querySelector('#staff-content .event-approval');assert(panel);assert.match(panel.textContent,/Accept event/);
+ await panel.querySelector('[data-admin="verify"]').onclick();assert.equal(actions[0].action,'verify');
+ panel=ui.document.querySelector('.event-approval');const form=panel.querySelector('#reject-event');form.elements.reason.value='Please correct the event details.';
+ form.onsubmit({preventDefault(){},target:form});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(actions[1].action,'reject');assert.equal(actions[1].reason,'Please correct the event details.');
+});
+
+test('a participant connects through Privy, mints from the shared link and imports the confirmed POAP into MetaMask on Sepolia',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111',contract='0x999524Cb77Db83864DA6FAC42614387921933922',now=Math.floor(Date.now()/1000);
+ let signedIn=false,mints=0,watch,chain='0x1',privyConnections=0;
+ const rainbow={request:async({method})=>method==='eth_accounts'?[wallet]:method==='eth_chainId'?'0xaa36a7':method==='personal_sign'?'signed':[]};
+ const metamask={isMetaMask:true,request:async input=>{
+  if(input.method==='eth_accounts')return [wallet];if(input.method==='eth_chainId')return chain;
+  if(input.method==='wallet_switchEthereumChain'){chain='0xaa36a7';return null;}
+  if(input.method==='wallet_watchAsset'){watch=input;return true;}throw Error('Unexpected MetaMask request: '+input.method);
+ }};
+ const event={id:7,title:'Approved workshop',description:'A day together',roles:['Attendee'],listed:true,approval:'approved',startsAt:now-10,endsAt:now+3600,mintStartsAt:now-10,mintEndsAt:now+3600};
+ const ui=await setup({hash:'#drop/7',events:[event],ethereum:metamask,privy:{connect:async()=>{privyConnections++;return {address:wallet,provider:rainbow,name:'rainbow'};},restore:async()=>null},respond:(path,options)=>{
+  if(path==='/api/config')return {chainId:11155111,chainName:'Sepolia',contractAddress:contract,categories:[],explorerUrl:'https://sepolia.etherscan.io'};
+  if(path==='/api/auth/me')return signedIn?{wallet,admin:false}:{};
+  if(path==='/api/auth/challenge')return {id:'challenge',message:'Sign in'};
+  if(path==='/api/auth/verify'){signedIn=true;return {wallet};}
+  if(path==='/api/events/7/claim'){mints++;const input=JSON.parse(options.body);assert.equal(input.publicLink,true);assert.equal(input.permanentConsent,true);return {ticket:'ticket'};}
+  if(path==='/api/claims/ticket')return {status:'confirmed',wallet,token_id:'17',tx_hash:'0xmint'};
+ }});
+ await ui.document.querySelector('#claim-connect').onclick();
+ const mint=ui.document.querySelector('#claim-mint');assert.equal(mint.hidden,false);assert.equal(mint.disabled,false);
+ ui.document.querySelector('#claim-consent').checked=true;await mint.onclick();assert.equal(mints,1);assert.equal(ui.location.hash,'claim/ticket/7');
+ ui.location.hash='#claim/ticket/7';await ui.render();assert.match(ui.document.querySelector('#live-app').textContent,/POAP minted/);
+ await ui.document.querySelector('#mint-add-metamask').onclick();
+ assert.equal(chain,'0xaa36a7');assert.equal(watch.params.type,'ERC721');assert.equal(watch.params.options.address,contract);assert.equal(watch.params.options.tokenId,'17');
+ assert.equal(privyConnections,1);assert.equal(mints,1);assert.equal(vm.runInContext('walletClient.provider',ui.context),rainbow);
 });

@@ -20,3 +20,9 @@ test('linked role drops group under their event and count as one attended event'
  const items=[{id:2,groupId:'event-group',attendanceVerified:true,role:'Attendee',club:'Campus'},{id:3,groupId:'event-group',attendanceVerified:true,role:'Volunteer',club:'Campus'}];
  assert.equal(groupCollection(items).length,1);assert.equal(profileStats(items).events,1);assert.equal(profileStats(items).participations,2);
 });
+
+test('public event cards contain only approved past events',async()=>{
+ const {isPublicPastEvent}=await import('./student-model.js');
+ assert(isPublicPastEvent({...event,approval:'approved'},201));
+ for(const change of [{approval:'pending'},{approval:'rejected'},{listed:false},{endsAt:250}])assert.equal(isPublicPastEvent({...event,approval:'approved',...change},201),false);
+});

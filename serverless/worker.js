@@ -46,7 +46,7 @@ async function user(request, env) {
 async function limit(request, env, route) {
   const ip = request.headers.get('cf-connecting-ip') || 'local';
   const bucket = Math.floor(now() / 60);
-  const key = await digest(`${env.QR_HMAC_SECRET}:${ip}:${route}:${bucket}`);
+  const key = await digest(`${new URL(request.url).origin}:${ip}:${route}:${bucket}`);
   const row = await env.DB.prepare(`INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?)
     ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count`).bind(key, now() + 120).first();
   if (row.count > 20) throw new HttpError(429, 'Too many requests. Please try again in a minute');
@@ -82,7 +82,7 @@ export function createHandler(chainFactory = connectChain) {
       }
       if (path === '/api/health' && request.method === 'GET') return await health(request,env,chainFactory);
       if (path === '/api/config' && request.method === 'GET') {
-        checkConfig(env);
+        checkConfig(env, {publicOnly:true});
         const chainId = Number(env.CHAIN_ID);
         return json({chainId, chainName:env.CHAIN_NAME, contractAddress:env.CONTRACT_ADDRESS,
           superAdminAddress:env.SUPER_ADMIN_ADDRESS, issuerAddress:env.ISSUER_ADDRESS || null, publicRpcUrl:env.PUBLIC_RPC_URL, explorerUrl:env.EXPLORER_URL,
@@ -91,7 +91,7 @@ export function createHandler(chainFactory = connectChain) {
             nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:[env.PUBLIC_RPC_URL],blockExplorerUrls:[env.EXPLORER_URL]}});
       }
       if (path === '/api/events' && request.method === 'GET') {
-        const {results} = await env.DB.prepare("SELECT e.*,e.cap-COALESCE(SUM(j.status!='failed'),0) AS remaining FROM events e LEFT JOIN claims c ON c.event_id=e.id LEFT JOIN jobs j ON j.id=c.id WHERE e.listed=1 GROUP BY e.id ORDER BY e.starts_at DESC LIMIT 200").all();
+        const {results} = await env.DB.prepare("SELECT e.*,e.cap-COALESCE(SUM(j.status!='failed'),0) AS remaining FROM events e LEFT JOIN claims c ON c.event_id=e.id LEFT JOIN jobs j ON j.id=c.id WHERE e.listed=1 AND e.approval='approved' GROUP BY e.id ORDER BY e.starts_at DESC LIMIT 200").all();
         return json(results.map(row=>({...publicEvent(row),remaining:Math.max(0,row.remaining)})));
       }
       if (path === '/api/auth/challenge' && request.method === 'POST') {
@@ -120,9 +120,9 @@ export function createHandler(chainFactory = connectChain) {
       if (path === '/api/auth/me') {
         const wallet = await user(request, env);
         const superAdmin=Boolean(env.SUPER_ADMIN_ADDRESS && wallet.toLowerCase() === env.SUPER_ADMIN_ADDRESS.toLowerCase());
-        let admin=false;
-        try {const chain=await chainFactory(env);await chain.assertContract();admin=await chain.admin(wallet);} catch { /* A network failure must not grant panel access. */ }
-        return json({wallet,admin,superAdmin:admin&&superAdmin});
+        let admin=false,adminUnavailable=false;
+        try {const chain=await chainFactory(env);await chain.assertContract();admin=await chain.admin(wallet);} catch { adminUnavailable=superAdmin; }
+        return json({wallet,admin,superAdmin:admin&&superAdmin,adminUnavailable});
       }
       if (path === '/api/auth/logout' && request.method === 'POST') {
         const cookie = request.headers.get('cookie')?.match(/kairo_session=([a-f0-9]{64})/)?.[1];

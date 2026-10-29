@@ -1,19 +1,27 @@
 import * as THREE from 'three';
 import { badgeSvg } from './art.js';
 
+export function mountCoinFallback(stage, spinButton, pauseButton) {
+  if (spinButton) spinButton.hidden = false;
+  spinButton?.addEventListener('click', () => stage.querySelector('.coin-fallback')?.animate?.([
+    {transform:'translate(-50%,-50%) rotate(-14deg) rotateY(0deg)'},
+    {transform:'translate(-50%,-50%) rotate(-14deg) rotateY(360deg)'}
+  ], {duration:matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 1400,easing:'ease-in-out'}));
+  pauseButton?.addEventListener('click', () => {
+    const paused = document.documentElement.classList.toggle('motion-paused');
+    pauseButton.setAttribute('aria-pressed', String(paused));
+    pauseButton.setAttribute('aria-label', paused ? 'Resume animations' : 'Pause animations');
+    document.dispatchEvent(new CustomEvent('poap-motion', {detail:paused}));
+  });
+}
+
 export async function mountCoin(stage, spinButton, pauseButton) {
   const still = matchMedia('(prefers-reduced-motion: reduce)');
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
   } catch {
-    spinButton.hidden = true;
-    pauseButton.addEventListener('click', () => {
-      const paused = document.documentElement.classList.toggle('motion-paused');
-      pauseButton.setAttribute('aria-pressed', String(paused));
-      pauseButton.setAttribute('aria-label', paused ? 'Resume animations' : 'Pause animations');
-      document.dispatchEvent(new CustomEvent('poap-motion', { detail: paused }));
-    });
+    mountCoinFallback(stage, spinButton, pauseButton);
     return;
   }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -79,7 +87,7 @@ export async function mountCoin(stage, spinButton, pauseButton) {
   } catch {
     renderer.dispose();
     renderer.domElement.remove();
-    spinButton.hidden = true;
+    mountCoinFallback(stage, spinButton, pauseButton);
     return;
   }
 
@@ -117,6 +125,7 @@ export async function mountCoin(stage, spinButton, pauseButton) {
   function run() { if (!frame && visible && !document.hidden) { last = 0; frame = requestAnimationFrame(render); } }
   const resize = () => {
     const width = stage.clientWidth, height = stage.clientHeight;
+    if (!width || !height) return;
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.position.z = width < 400 ? 8.05 : 7.3;
@@ -150,8 +159,8 @@ export async function mountCoin(stage, spinButton, pauseButton) {
     run();
   });
   document.addEventListener('poap-motion', event => { paused = event.detail; run(); });
-  spinButton.addEventListener('click', () => { targetYaw += Math.PI * 2; run(); });
-  pauseButton.addEventListener('click', () => {
+  spinButton?.addEventListener('click', () => { targetYaw += Math.PI * 2; run(); });
+  pauseButton?.addEventListener('click', () => {
     paused = !paused;
     document.documentElement.classList.toggle('motion-paused', paused);
     pauseButton.setAttribute('aria-pressed', String(paused));

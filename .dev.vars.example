@@ -1,7 +1,5 @@
-# Local Worker environment; the public admin address must match the contract.
-SUPER_ADMIN_ADDRESS=0xYourSuperAdminWalletAddress
+# Local Worker secrets. The public super-admin address is configured in wrangler.jsonc.
 ISSUER_PRIVATE_KEY=
-QR_HMAC_SECRET=
 # Optional dedicated Sepolia RPC; otherwise PUBLIC_RPC_URL is used.
 SEPOLIA_RPC_URL=
 

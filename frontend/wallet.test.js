@@ -101,11 +101,36 @@ test('Privy selected wallets use the shared provider and session lifecycle', asy
  await wallet.restore(address);assert.equal(wallet.provider,provider);
 });
 
-test('Privy account switching requests MetaMask account selection and uses the newly approved account',async()=>{
- const old='0x1111111111111111111111111111111111111111',next='0x2222222222222222222222222222222222222222',methods=[];
- let walletList;
- const provider={request:async({method})=>{methods.push(method);return method==='eth_accounts'?[next]:[];},on(){},removeListener(){}};
- const win={addEventListener(){},dispatchEvent(){},Event:class{},kairoPrivy:{connect:async list=>{walletList=list;return {address:old,provider,name:'metamask'};}}};
+test('Privy account switching keeps the full wallet chooser and uses the selected wallet',async()=>{
+ const next='0x2222222222222222222222222222222222222222',methods=[];
+ let walletList,options;
+ const provider={request:async({method})=>{methods.push(method);return [];},on(){},removeListener(){}};
+ const win={addEventListener(){},dispatchEvent(){},Event:class{},kairoPrivy:{connect:async (list,input)=>{walletList=list;options=input;return {address:next,provider,name:'rainbow'};}}};
  const wallet=metaMaskWallet(win);assert.equal(await wallet.connect('metamask',{switchAccount:true}),next);
- assert.deepEqual(walletList,['metamask']);assert.deepEqual(methods,['wallet_requestPermissions','eth_accounts']);assert.equal(wallet.provider,provider);
+ assert.equal(walletList,undefined);assert.deepEqual(methods,[]);assert.equal(wallet.provider,provider);
+ assert.deepEqual(options,{switchAccount:true});
+});
+
+test('switching detaches the old wallet without ending Privy; explicit disconnect still logs out',async()=>{
+ const mm=provider();let logouts=0;
+ const window=win(mm);window.kairoPrivy={connect:async()=>({address,provider:mm,name:'metamask'}),disconnect:async()=>{logouts++;}};
+ const wallet=metaMaskWallet(window);await wallet.connect();await wallet.disconnect({switchAccount:true});
+ assert.equal(logouts,0);assert.equal(mm.listeners.size,0);assert.throws(()=>wallet.provider);
+ await wallet.connect('metamask',{switchAccount:true});
+ assert.deepEqual(mm.methods,['wallet_revokePermissions','wallet_requestPermissions','eth_requestAccounts']);
+ await wallet.disconnect();assert.equal(logouts,1);
+});
+
+test('MetaMask import uses a separate provider without replacing the wallet chosen through Privy',async()=>{
+ const address='0x1111111111111111111111111111111111111111',rainbow={request:async()=>[address]},metamask={isMetaMask:true,request:async()=>[address]};
+ const win={addEventListener(){},dispatchEvent(){},Event:class{},ethereum:metamask,kairoPrivy:{connect:async()=>({address,provider:rainbow,name:'rainbow'})}};
+ const wallet=metaMaskWallet(win);await wallet.connect();
+ assert.equal(await wallet.metaMaskProvider(),metamask);assert.equal(wallet.provider,rainbow);
+});
+
+test('MetaMask-only selection is requested only for NFT import, not normal Privy connection',async()=>{
+ const address='0x1111111111111111111111111111111111111111',rainbow={request:async()=>[address]},metamask={request:async()=>[address]},choices=[];
+ const win={addEventListener(){},dispatchEvent(){},Event:class{},kairoPrivy:{connect:async list=>{choices.push(list);return {address,provider:list?metamask:rainbow,name:list?'metamask':'rainbow'};}}};
+ const wallet=metaMaskWallet(win);await wallet.connect();assert.equal(await wallet.metaMaskProvider(),metamask);
+ assert.deepEqual(choices,[undefined,['metamask']]);assert.equal(wallet.provider,rainbow);
 });

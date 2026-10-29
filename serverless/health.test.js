@@ -41,3 +41,36 @@ test('missing POAP request migration makes readiness fail even when chain and re
  };
  const response=await vm.runInNewContext(`${health.toString()}; health(request,env,connectChain)`,context);assert.equal(response.status,503);const result=await response.json();assert.equal(result.dependencies.d1.status,'error');assert.equal(result.dependencies.contract.status,'ok');
 });
+
+test('public wallet settings remain available without admin credentials while readiness still fails closed',async t=>{
+ t.mock.method(console,'error',()=>{});
+ const {fixture}=await import('./test-fixture.js');
+ const {checkConfig}=await import('./health.js');
+ const f=fixture();t.after(()=>f.sqlite.close());delete f.env.SUPER_ADMIN_ADDRESS;
+ assert.doesNotThrow(()=>checkConfig(f.env,{publicOnly:true}));
+ assert.throws(()=>checkConfig(f.env),{code:'NOT_CONFIGURED'});
+ const response=await f.request('/config');assert.equal(response.status,200);
+ const config=await response.json();assert.equal(config.chainId,11155111);assert.equal(config.walletNetwork.chainId,'0xaa36a7');
+ assert(config.walletNetwork.rpcUrls.length);assert.equal(config.superAdminAddress,undefined);
+});
+
+test('invalid public network settings are rejected instead of guessing a network',async()=>{
+ const {checkConfig}=await import('./health.js');
+ const {fixture}=await import('./test-fixture.js');const f=fixture();
+ try {
+  for(const values of [{CHAIN_ID:'1'},{PUBLIC_RPC_URL:'javascript:alert(1)'},{CONTRACT_ADDRESS:'invalid'}])assert.throws(()=>checkConfig({...f.env,...values},{publicOnly:true}),{code:'NOT_CONFIGURED'});
+ }finally{f.sqlite.close();}
+});
+
+test('checked-in Worker configuration provides the supreme admin without local secret files',async()=>{
+ const {readFileSync}=await import('node:fs');const {checkConfig}=await import('./health.js');
+ const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert.equal(config.vars.SUPER_ADMIN_ADDRESS,'0x4CB1E99035D2812472B2d50DBB590E9C593188bE');
+ assert.doesNotThrow(()=>checkConfig(config.vars));
+});
+
+test('sponsored publishing readiness requires the relayer key and no QR signing secret',async t=>{
+ const {fixture}=await import('./test-fixture.js');const {checkConfig}=await import('./health.js');
+ const f=fixture();t.after(()=>f.sqlite.close());delete f.env.QR_HMAC_SECRET;
+ assert.doesNotThrow(()=>checkConfig(f.env,{writes:true}));
+});

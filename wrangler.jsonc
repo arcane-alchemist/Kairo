@@ -27,7 +27,8 @@
     "EVENTS_PER_WALLET_PER_DAY": "5",
     "EMAIL_RETENTION_DAYS": "30",
     "MEDIA_BASE_URL": "https://kairo.aakritigupta7227.workers.dev/media/",
-    "ARCHIVE_CONTRACT_ADDRESSES": "[\"0x999524Cb77Db83864DA6FAC42614387921933922\",\"0x90a2920272dd3852193A79DA621B1Ccc9D093714\"]"
+    "ARCHIVE_CONTRACT_ADDRESSES": "[\"0x999524Cb77Db83864DA6FAC42614387921933922\",\"0x90a2920272dd3852193A79DA621B1Ccc9D093714\"]",
+    "SUPER_ADMIN_ADDRESS": "0x4CB1E99035D2812472B2d50DBB590E9C593188bE"
   },
   "d1_databases": [
     {
@@ -65,5 +66,10 @@
       "*/15 * * * *"
     ]
   },
-  "preview_urls": false
+  "preview_urls": false,
+  "secrets": {
+    "required": [
+      "ISSUER_PRIVATE_KEY"
+    ]
+  }
 }

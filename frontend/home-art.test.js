@@ -1,33 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseHTML} from 'linkedom';
+import {readFileSync} from 'node:fs';
 import {mountHomeArt} from './home-art.js';
 
-test('optional scenes load once on approach, with the press independent of the medal', async () => {
-  const {document,window}=parseHTML('<section data-home><div id="coin-stage"></div><button id="spin-coin"></button><button id="pause-motion"></button><div id="press-art"></div><button id="press-button"></button><span id="press-readout"></span></section>');
-  const observers=[],loaded=[],mounted=[];
-  window.IntersectionObserver=class {
-    constructor(callback){this.callback=callback;observers.push(this);}
-    observe(node){this.node=node;} disconnect(){this.disconnected=true;}
-  };
-  mountHomeArt(document,window,{
-    coin:async()=>{loaded.push('coin');return {mountCoin:()=>mounted.push('coin')};},
-    press:async()=>{loaded.push('press');return {mountPress:()=>mounted.push('press')};}
-  });
-  assert.deepEqual(loaded,[]);
-  observers[0].callback([{isIntersecting:false}]); assert.deepEqual(loaded,[]);
-  observers[0].callback([{isIntersecting:true}]); observers[0].callback([{isIntersecting:true}]);
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(loaded,['coin']); assert.deepEqual(mounted,['coin']); assert(observers[0].disconnected);
-  observers[1].callback([{isIntersecting:true}]); await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(mounted,['coin','press']);
+function scenePage() {
+ return parseHTML('<section data-home><div id="coin-stage"></div><button id="spin-coin">Give it a spin</button><button id="pause-motion"></button><div id="press-art"><svg id="static-press"/></div><button id="press-button">Press a little memory</button><span id="press-readout"></span></section>');
+}
+test('coin and press initialize immediately without waiting for a viewport callback',async()=>{
+ const {document,window}=scenePage(),loaded=[],mounted=[];
+ window.IntersectionObserver=class {constructor(){throw Error('Must not gate scene initialization');}};
+ await mountHomeArt(document,window,{
+  coin:async()=>{loaded.push('coin');return {mountCoin:()=>mounted.push('coin')};},
+  press:async()=>{loaded.push('press');return {mountPress:()=>mounted.push('press')};}
+ });
+ assert.deepEqual(loaded,['coin','press']);assert.deepEqual(mounted,['coin','press']);
 });
 
-test('failed optional imports leave the product usable and explain unavailable art', async () => {
-  const {document,window}=parseHTML('<section><div id="press-art"></div><button id="press-button"></button><span id="press-readout"></span></section>');
-  window.IntersectionObserver=undefined;
-  mountHomeArt(document,window,{press:async()=>{throw Error('Offline');}});
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.match(document.querySelector('#press-readout').textContent,/unavailable/);
-  assert(document.querySelector('#press-button').hidden);
+test('a failed scene retains static artwork and can be retried without blocking the other scene',async()=>{
+ const {document,window}=scenePage();let failed=true,coins=0,presses=0;
+ await mountHomeArt(document,window,{
+  coin:async()=>({mountCoin:()=>{coins++;}}),
+  press:async()=>{if(failed)throw Error('Offline');return {mountPress:()=>{presses++;}};}
+ });
+ assert.equal(coins,1);assert.equal(presses,0);assert(document.querySelector('#static-press'));
+ const button=document.querySelector('#press-button');assert.equal(button.hidden,false);assert.match(button.textContent,/Retry/);
+ failed=false;await button.onclick();assert.equal(presses,1);assert.equal(button.textContent,'Press a little memory');assert.equal(button.onclick,null);
+});
+
+test('the built homepage includes the entire memory press before JavaScript or API requests',()=>{
+ const {document}=parseHTML(readFileSync(new URL('../dist/index.html',import.meta.url),'utf8'));
+ assert(document.querySelector('#press-art svg'));assert(document.querySelector('#press-head'));assert(document.querySelector('#pressed-badge'));
+});
+
+test('the real homepage mounts both scenes after coin and wallet controls are removed',async()=>{
+ const {document,window}=parseHTML(readFileSync(new URL('../dist/index.html',import.meta.url),'utf8'));
+ let coinMounted=false,pressMounted=false;
+ await mountHomeArt(document,window,{
+  coin:async()=>({mountCoin:(stage,spin,pause)=>{assert(stage);assert.equal(spin,null);assert.equal(pause,null);coinMounted=true;}}),
+  press:async()=>({mountPress:(stage,button,readout)=>{assert(stage.querySelector('#press-head'));assert(button);assert(readout);pressMounted=true;}})
+ });
+ assert(coinMounted&&pressMounted);
+ assert.equal(document.querySelector('#home-connect,#wallet-welcome,.hero-actions,.date-label,.press-card'),null);
+ assert(document.querySelector('#wallet'));
 });

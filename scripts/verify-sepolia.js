@@ -13,7 +13,8 @@ try {
  if(BigInt(await provider.send('eth_chainId',[]))!==11155111n)throw Error('Sepolia required');
  const contract=new Contract(config.CONTRACT_ADDRESS,ABI,provider);
  if(await provider.getCode(config.CONTRACT_ADDRESS)==='0x')throw Error('Contract missing');
- const admin=getAddress(values.SUPER_ADMIN_ADDRESS);
+ const admin=getAddress(config.SUPER_ADMIN_ADDRESS);
+ if(values.SUPER_ADMIN_ADDRESS && getAddress(values.SUPER_ADMIN_ADDRESS)!==admin)throw Error('Admin environment differs from wrangler.jsonc');
  const hasAdmin=await contract.hasRole(ZeroHash,admin);
  const report={chain:'Sepolia',contract:config.CONTRACT_ADDRESS,superAdmin:admin,configuredWalletHasAdmin:hasAdmin};
  const deployment=JSON.parse(readFileSync('deployments/sepolia.json','utf8'));
