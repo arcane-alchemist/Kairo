@@ -3,10 +3,17 @@ import { badgeSvg } from './art.js';
 
 export function mountCoinFallback(stage, spinButton, pauseButton) {
   if (spinButton) spinButton.hidden = false;
-  spinButton?.addEventListener('click', () => stage.querySelector('.coin-fallback')?.animate?.([
+  const spin = () => stage.querySelector('.coin-fallback')?.animate?.([
     {transform:'translate(-50%,-50%) rotate(-14deg) rotateY(0deg)'},
     {transform:'translate(-50%,-50%) rotate(-14deg) rotateY(360deg)'}
-  ], {duration:matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 1400,easing:'ease-in-out'}));
+  ], {duration:matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 1400,easing:'ease-in-out'});
+  stage.addEventListener('click', spin);
+  stage.addEventListener('keydown', event => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    spin();
+  });
+  spinButton?.addEventListener('click', spin);
   pauseButton?.addEventListener('click', () => {
     const paused = document.documentElement.classList.toggle('motion-paused');
     pauseButton.setAttribute('aria-pressed', String(paused));
@@ -137,20 +144,29 @@ export async function mountCoin(stage, spinButton, pauseButton) {
   document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelAnimationFrame(frame); frame = 0; } else run(); });
   still.addEventListener('change', run);
 
-  stage.addEventListener('pointerdown', event => { dragging = true; startX = event.clientX; startYaw = targetYaw; stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.button !== 0) return;
+    dragging = true; startX = event.clientX; startYaw = targetYaw;
+    stage.setPointerCapture(event.pointerId);
+  });
   stage.addEventListener('pointermove', event => {
     const box = stage.getBoundingClientRect();
-    if (dragging) targetYaw = startYaw + (event.clientX - startX) * .012;
+    if (dragging) targetYaw = startYaw + (event.clientX - startX) * (event.pointerType === 'mouse' ? .012 : Math.PI * 2 / Math.max(box.width * .65, 1));
     else if (event.pointerType === 'mouse') { targetYaw = -.36 + ((event.clientX - box.left) / box.width - .5) * .7; targetPitch = .12 + ((event.clientY - box.top) / box.height - .5) * .3; }
     run();
   });
   const release = event => { dragging = false; if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId); };
   stage.addEventListener('pointerup', release);
   stage.addEventListener('pointercancel', release);
-  stage.addEventListener('pointerleave', () => { if (!dragging) { targetYaw = -.36; targetPitch = .12; run(); } });
+  stage.addEventListener('lostpointercapture', () => { dragging = false; });
+  stage.addEventListener('click', event => {
+    if (event.pointerType !== 'mouse' && (!event.detail || Math.abs(event.clientX - startX) < 8)) { targetYaw += Math.PI * 2; run(); }
+  });
+  stage.addEventListener('pointerleave', event => { if (!dragging && event.pointerType === 'mouse') { targetYaw = -.36; targetPitch = .12; run(); } });
   stage.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home'].includes(event.key)) return;
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'Enter', ' '].includes(event.key)) return;
     event.preventDefault();
+    if (event.key === 'Enter' || event.key === ' ') targetYaw += Math.PI * 2;
     if (event.key === 'ArrowLeft') targetYaw -= .3;
     if (event.key === 'ArrowRight') targetYaw += .3;
     if (event.key === 'ArrowUp') targetPitch -= .15;
