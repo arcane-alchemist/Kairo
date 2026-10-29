@@ -6,12 +6,12 @@ import { claimEntry } from './claim-route.js';
 import { BrowserProvider, Contract, getAddress, hexlify, toUtf8Bytes } from 'ethers';
 import QRCode from 'qrcode';
 import { badgeSvg } from './art.js';
-import { mountCoin } from './scene.js';
-import { mountPress } from './press.js';
+import { mountHomeArt } from './home-art.js';
 import { mountNative } from './native.js';
 import { metaMaskWallet } from './wallet.js';
 import { aboutContent, documentationContent, issuerContent, doodle } from './content.js';
 import { createPageLoader } from './page-loader.js';
+import { preserveEventDraft } from './event-draft.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const all = (selector, parent = document) => [...parent.querySelectorAll(selector)];
@@ -25,7 +25,7 @@ const modalBody = document.querySelector('#modal-body');
 installPrivy(window, document);
 const pageLoader = createPageLoader(document, window);
 pageLoader.begin();
-let initialized = false;
+let initialized = false, homeArtMounted = false;
 
 let connectedWallet = '', activeChain = '', collectionRequest = 0;
 let events = [], config = {}, session = null, renderId = 0;
@@ -100,19 +100,20 @@ async function api(path, options = {}) {
 const post = (path, data) => api(path, { method: 'POST', body: JSON.stringify(data) });
 
 async function busy(button, action) {
-  const text = button.textContent; button.disabled = true; button.textContent = 'One moment…';
-  try { return await action(); } catch (error) { if(button.id==='publish-button'){const status=document.querySelector('#publish-status');if(status?.querySelector('.inline-loading'))status.textContent=error.message;}retryNotice(error,() => busy(button,action)); toast(error.code === 4001 || error.code === 'ACTION_REJECTED' ? 'Request cancelled. You can try again.' : error.code === -32002 ? 'A MetaMask request is already open. Review it in your wallet.' : error.message || 'Something went wrong'); }
-  finally { button.disabled = false; button.textContent = button.id === 'wallet' ? session ? short(session.wallet) : 'Connect wallet' : text; if (button.id === 'wallet-network') walletHeader(); }
+  if (button.disabled) return;
+  const content = [...button.childNodes]; button.disabled = true; button.setAttribute('aria-disabled', 'true'); button.setAttribute('aria-busy', 'true'); button.textContent = 'One moment…';
+  try { return await action(); } catch (error) { if(button.id==='publish-button'){const status=document.querySelector('#publish-status');if(status?.querySelector('.inline-loading'))status.textContent=error.message;}retryNotice(error,() => button.isConnected ? busy(button,action) : render()); toast(error.code === 4001 || error.code === 'ACTION_REJECTED' ? 'Request cancelled. You can try again.' : error.code === -32002 ? 'A MetaMask request is already open. Review it in your wallet.' : error.message || 'Something went wrong'); }
+  finally { button.disabled = false; button.removeAttribute('aria-disabled'); button.removeAttribute('aria-busy'); button.replaceChildren(...content); if (button.id === 'wallet' || button.id === 'wallet-network') walletHeader(); }
 }
 
-function artwork(event) { return event.image && safeImage(event.image) ? `<img src="${safeImage(event.image)}" alt="${esc(event.title)} collectible" loading="lazy">` : '<div class="missing-art"><span aria-hidden="true">✧</span><small>No artwork yet</small></div>'; }
-function collectibleArtwork(item) { if (item.animationUrl && safeImage(item.animationUrl)) return `<video class="collectible-video" src="${safeImage(item.animationUrl)}" poster="${safeImage(item.image)}" controls playsinline preload="metadata" aria-label="${esc(item.title)} video collectible"></video>`; return item.image && safeImage(item.image) ? artwork(item) : '<div class="missing-art"><span aria-hidden="true">✧</span><small>Artwork unavailable</small></div>'; }
+function artwork(event) { return event.image && safeImage(event.image) ? `<img width="512" height="512" decoding="async" src="${safeImage(event.image)}" alt="${esc(event.title)} collectible" loading="lazy">` : '<div class="missing-art"><span aria-hidden="true">✧</span><small>No artwork yet</small></div>'; }
+function collectibleArtwork(item) { if (item.animationUrl && safeImage(item.animationUrl)) return `<video width="512" height="512" class="collectible-video" src="${safeImage(item.animationUrl)}" poster="${safeImage(item.image)}" controls playsinline preload="metadata" aria-label="${esc(item.title)} video collectible"></video>`; return item.image && safeImage(item.image) ? artwork(item) : '<div class="missing-art"><span aria-hidden="true">✧</span><small>Artwork unavailable</small></div>'; }
 
 function card(event, collection = false) {
  if(!collection&&eventState(event)==='Past event')return `<article class="card past-event-card"><div class="card-art">${artwork(event)}</div><div class="card-body"><h3>${esc(event.title)}</h3><div class="card-info">${esc(event.venue)}</div><div class="card-info">${event.startsAt?date(event.startsAt):'Date unavailable'}</div></div></article>`;
  return `<article class="card"><div class="card-art">${collection?collectibleArtwork(event):artwork(event)}<span class="card-status">${collection?'Ownership verified':eventState(event)}</span></div><div class="card-body"><div class="card-club">${esc(event.club)} · ${esc(event.category)}</div><h3>${esc(event.title)}</h3><span class="pill">${esc(collection?event.role:(event.roles||['Attendee']).join(' · '))}</span>${event.verified?'<span class="pill green">Verified event</span>':''}<div class="card-info">${event.startsAt?date(event.startsAt):'Date unavailable'}</div><div class="card-info">${esc(event.venue)}</div>${!collection&&eventState(event)==='Past event'?`<div class="card-info">Drop #${esc(event.dropId ?? event.id)}${event.tokenId!=null?` · Token #${esc(event.tokenId)}`:''}</div>`:''}<div class="card-bottom"><span>${collection?`Token #${esc(event.tokenId)}`:event.paused?'Minting paused':event.mintEndsAt&&Date.now()/1000>event.mintEndsAt?'Minting closed':'Mint window applies'}</span><a class="card-link" href="#${collection?`badge/${esc(event.tokenId)}/${esc(collectionWallet)}`:`drop/${esc(event.id)}`}">${collection?'View badge':'View event'} ↗</a></div></div></article>`;
 }
-function loadingMarkup(label) { return `<div class="inline-loading" role="status" aria-label="${esc(label)}">${document.querySelector('#page-loader svg').outerHTML}<span>${esc(label)}</span></div>`; }
+function loadingMarkup(label) { return `<div class="inline-loading" role="status" aria-label="${esc(label)}">${document.querySelector('#page-loader svg').outerHTML}<div class="skeleton-lines" aria-hidden="true"><span></span><span></span><span></span></div><span>${esc(label)}</span></div>`; }
 function empty(title, text) { return `<div class="empty"><span aria-hidden="true">✧</span><h3>${esc(title)}</h3><p>${esc(text)}</p></div>`; }
 
 function show(html) { clearInterval(ticketTimer); modalBody.innerHTML = html; if (!modal.open) modal.showModal(); }
@@ -350,7 +351,7 @@ function badgeDetails(item) {
 }
 async function collection(version, profile = false) {
   const ownGallery = ['#gallery','#collector/collection'].includes(location.hash);
-  if (ownGallery && !session) { main.innerHTML = empty('Your moments, together', 'Your badges appear here with your shared wallet session.') + '<a class="text-link" href="#">← Back to home</a>'; return; }
+  if (ownGallery && !session) { main.innerHTML = empty('Your moments, together', 'Connect your wallet to see the POAPs you have collected.') + '<div class="form-actions"><button class="button button-dark" id="gallery-connect">Connect wallet</button><a class="text-link" href="#">← Back to home</a></div>'; main.querySelector('#gallery-connect').onclick=headerConnect; return; }
   const addressFromRoute = (location.hash.startsWith('#collector/') ? '' : location.hash.split('/')[profile ? 1 : location.hash.startsWith('#badge/') ? 2 : 1]);
   const savedWallet = addressFromRoute || connectedWallet || session?.wallet || '';
   main.innerHTML = `<div class="eyebrow">${profile ? 'YOUR PARTICIPATION, VERIFIED' : 'A RECORD OF YOUR MOMENTS'}</div><h1 class="page-title">${profile ? 'Your participation profile.' : 'Your collection.'}</h1><p class="lead">${profile ? 'A public wallet profile, built from verified participation. Your identity stays yours.' : 'The communities, ideas, and experiences you carry with you.'}</p><form id="collection-form" class="panel wallet-lookup"><label class="field">Ethereum wallet address<input id="collection-wallet" required placeholder="0x…" value="${esc(savedWallet)}" autocomplete="off" spellcheck="false"></label><button class="button">View ${profile ? 'profile' : 'collection'} ↗</button></form><div class="form-actions"><button class="button button-light" id="refresh-collection">Refresh Gallery ↻</button></div><div id="profile-stats"></div><div id="collection-status" role="status" aria-live="polite"></div><div id="collection-tools"></div><div id="collection-grid">${empty('Your story is waiting', 'Connect a wallet or enter an address. Viewing public collectibles does not require a signature.')}</div><div id="collection-more"></div>`;
@@ -381,7 +382,7 @@ async function collection(version, profile = false) {
         if (select) select.innerHTML = options(values, label, key);
       }
       const rows = filterCollection(collectionItems, filters);
-      grid.innerHTML = rows.length ? `<div class="gallery-events">${groupCollection(rows).map(group => `<section class="gallery-event"><h2>${esc(group.event.title)}</h2>${ownGallery ? '' : `<p>${esc(group.event.club)}</p>`}<div class="grid">${group.badges.map(row => ownGallery ? `<article class="gallery-badge-entry"><a class="card gallery-badge" href="#badge/${esc(row.tokenId)}/${esc(collectionWallet)}" aria-label="View ${esc(row.title)} ${esc(row.role)} POAP"><div class="card-art">${collectibleArtwork(row)}</div><div class="gallery-badge-info"><strong>Token #${esc(row.tokenId)}</strong><span>${esc(row.role)} · Import details ↗</span><span>Permanent · Soulbound</span></div></a><button class="button button-light" data-add-nft data-contract="${esc(row.contractAddress)}" data-token="${esc(row.tokenId)}" ${row.ownershipVerified&&row.contractAddress?'':'disabled'}>Add to MetaMask</button></article>` : card(row, true)).join('')}</div></section>`).join('')}</div>` : collectionItems.length ? empty('No matching collectibles', 'Try another search or filter.') : complete && total === 0 ? `${empty('Your first moment is ahead of you', 'Discover an event, participate, and keep a collectible from the experience.')}<a class="button" href="#collector/gallery">Discover events ↗</a>` : empty('Your collection is still being checked', 'Ownership is checked on-chain. Records may take a moment to load.');
+      grid.innerHTML = rows.length ? `<div class="gallery-events">${groupCollection(rows).map(group => `<section class="gallery-event"><h2>${esc(group.event.title)}</h2>${ownGallery ? '' : `<p>${esc(group.event.club)}</p>`}<div class="grid">${group.badges.map(row => ownGallery ? `<article class="gallery-badge-entry"><div class="card gallery-badge"><div class="card-art">${collectibleArtwork(row)}</div><a class="gallery-badge-info" href="#badge/${esc(row.tokenId)}/${esc(collectionWallet)}" aria-label="View ${esc(row.title)} ${esc(row.role)} POAP"><strong>Token #${esc(row.tokenId)}</strong><span>${esc(row.role)} · Import details ↗</span><span>Permanent · Soulbound</span></a></div><button class="button button-light" data-add-nft data-contract="${esc(row.contractAddress)}" data-token="${esc(row.tokenId)}" ${row.ownershipVerified&&row.contractAddress?'':'disabled'}>Add to MetaMask</button></article>` : card(row, true)).join('')}</div></section>`).join('')}</div>` : collectionItems.length ? empty('No matching collectibles', 'Try another search or filter.') : complete && total === 0 ? `${empty('Your first moment is ahead of you', 'Discover an event, participate, and keep a collectible from the experience.')}<a class="button" href="#collector/gallery">Discover events ↗</a>` : empty('Your collection is still being checked', 'Ownership is checked on-chain. Records may take a moment to load.');
       grid.querySelectorAll('[data-add-nft]').forEach(button=>button.onclick=()=>busy(button,()=>addNFTToMetaMask(collectionItems.find(item=>item.contractAddress===button.dataset.contract&&item.tokenId===button.dataset.token),wallet)));
       status.innerHTML = ownGallery ? '' : `<div class="notice">${complete ? `${collectionItems.length} of ${esc(total)} on-chain collectibles loaded.` : `Checking the Kairo contract… ${collectionItems.length} of ${esc(total)} collectibles loaded.`}${complete && collectionItems.length < total ? ' Some records are not indexed yet. Retry shortly; this is not an empty collection.' : ''}${pending&&!ownGallery ? ` ${esc(pending)} issuance${pending > 1 ? 's' : ''} awaiting confirmation.` : ''} Only the configured Kairo contract is included. <a class="card-link" href="#${profile ? 'collection' : 'profile'}/${wallet}">${profile ? 'View collection' : 'View profile'} ↗</a></div>`;
     };
@@ -431,24 +432,26 @@ async function organizer(version,adminView=false) {
  if(!workspace.events.length){select.hidden=true;main.querySelector('#staff-content').innerHTML='<section class="studio-empty"><h2>No events to manage yet.</h2><p>Your published events and role badges will appear here.</p><a class="button button-dark" href="#create">Create an event</a></section>';return;}
  let page=0,linksPage=0,requestsPage=0;
  select.onchange=async changed=>{
-  if(changed){page=0;linksPage=0;requestsPage=0;}
+  if(changed && !changed.background){page=0;linksPage=0;requestsPage=0;}
   if(!select.value)return;const id=Number(select.value),event=workspace.events.find(e=>e.id===id),content=main.querySelector('#staff-content');
+  if(changed?.target===select || !content.children.length)content.innerHTML=loadingMarkup('Loading event dashboard');
   try {
    const [stats,transactions,recipientPage,requests]=await Promise.all([api(`/events/${id}/dashboard`),api(`/events/${id}/transactions?page=${page}`),api(`/events/${id}/links?page=${linksPage}`),adminView?api(`/events/${id}/requests?page=${requestsPage}`):null]);
-   if(version!==renderId||Number(select.value)!==id)return;
+   if(version!==renderId||Number(select.value)!==id||changed?.background&&content.dataset.editing==='true')return;
    if(stats.event)Object.assign(event,stats.event);
    const creator=event.organizer?.toLowerCase()===session.wallet.toLowerCase();
    const links=recipientPage.rows;
    const mintStart=stats.mintStartsAt??event.mintStartsAt,mintEnd=stats.mintEndsAt??event.mintEndsAt;
    const qrReady=event.listed&&!event.paused&&!stats.paused&&Date.now()/1000>=mintStart&&Date.now()/1000<=mintEnd&&stats.capRemaining>0;
    const mintReason=qrReady?'Ready to mint on Sepolia.':!event.listed?'Event rejected.':event.paused||stats.paused?'Minting is paused.':Date.now()/1000<mintStart?'The mint window has not opened.':Date.now()/1000>mintEnd?'The mint window has ended.':'No supply remains.';
-   content.innerHTML=`${adminView?`<section class="panel" aria-label="POAP request review"><h2>POAP requests · ${esc(event.roles[0])}</h2><div class="table-wrap"><table><thead><tr><th>Address</th><th>Status</th><th>Actions</th></tr></thead><tbody>${requests.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(row.status)}${row.mint_status?` · ${esc(row.mint_status)}`:''}${row.error?`<small>${esc(row.error)}</small>`:''}</td><td>${row.status==='pending'?`<button class="button button-small" data-request="${esc(row.id)}" data-decision="accept" ${qrReady?'':'disabled'}>Accept & mint</button><button class="button button-danger button-small" data-request="${esc(row.id)}" data-decision="reject">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="3">No POAP requests yet.</td></tr>'}</tbody></table></div><div id="request-pages"></div></section>`:''}<div class="stats claim-stats">${[['Links issued',stats.linksIssued],['Links used',stats.linksUsed],['QR claims',stats.qrClaims],['Minted',stats.minted],['Pending',stats.pending],['Failed',stats.failed],['Cap remaining',stats.capRemaining??'Unlimited']].map(([name,value])=>`<div class="stat"><small>${name}</small><strong>${esc(value)}</strong></div>`).join('')}</div><div class="form-actions">${event.roles[0].toLowerCase()==='attendee'?`<button id="walk-in" class="button" ${qrReady?'':'disabled'}>Walk-in QR</button>`:''}<button id="refresh-dashboard" class="button button-light">Refresh</button><a class="button button-light" href="/api/events/${id}/export" download>Export transactions CSV</a></div><p>Walk-in QR is available for Attendees during the mint window, while minting is active and supply remains. Recipient links can be prepared now and redeemed during that window.</p><h2>Public mint link</h2><p>Share this link with participants. Each wallet can mint this role once after event approval.</p><input aria-label="Public mint link" readonly value="${esc(location.origin)}/#drop/${esc(id)}"><h2>Single-use recipient links</h2><p>A link works for whoever opens it first. Emails are private to you and the super admin and are deleted after ${esc(config.emailRetentionDays||30)} days, or on request. Save links when issued: only their hashes are stored.</p><form id="recipients-form"><label class="field">Paste email,role CSV (or enter one person per line)<textarea name="recipients" required placeholder="email,role&#10;person@example.org,Attendee"></textarea></label><label class="field">Or upload CSV<input id="recipient-file" type="file" accept=".csv,text/csv"></label><button class="button">Create links</button></form><div id="issued-links"></div><button class="button button-light" id="erase-emails">Delete all emails for this role</button><div class="table-wrap"><table><thead><tr><th>Email</th><th>State</th><th>Actions</th></tr></thead><tbody>${links.map(link=>`<tr><td>${esc(link.email||'Email deleted')}</td><td>${esc(link.revoked_at?'Revoked':link.state)}</td><td>${link.state==='issued'?`<button class="button button-light button-small" data-regenerate="${esc(link.id)}">Regenerate</button><button class="button button-light button-small" data-revoke="${esc(link.id)}">Revoke</button>`:''}<button class="button button-light button-small" data-delete-email="${esc(link.id)}">Delete email</button></td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">No recipient links yet. Add recipients above to get started.</td></tr>'}</tbody></table></div><div id="link-pages"></div><h2>Transactions · ${esc(event.roles[0])}</h2><div class="table-wrap"><table><thead><tr><th>Wallet</th><th>Role</th><th>Claim method</th><th>Token</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>${transactions.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(event.roles[0])}</td><td>${esc(row.method)}</td><td>${esc(row.token_id||'—')}</td><td>${esc(row.status)}${row.error?`<small>${esc(row.error)}</small>`:''}${row.status==='failed'?` <button class="button button-light button-small" data-retry="${esc(row.id)}">Retry</button>`:''}</td><td>${date(row.created_at)} ${time(row.created_at)}</td><td>${row.tx_hash?`<a href="${txLink(row.tx_hash)}" target="_blank" rel="noopener">Etherscan ↗</a>`:'Queued'}</td></tr>`).join('')||'<tr><td colspan="7" class="table-empty">No claims yet. Transactions will appear here when participants mint.</td></tr>'}</tbody></table></div><div id="transaction-pages"></div>${adminView&&!event.deleted?`<section class="panel admin-event-tools"><h2>Mint POAP to an address</h2><p>Mint the selected role directly to a recipient. POAPs are permanent and cannot be transferred or burned. Check the address before minting.</p><form id="direct-mint"><label class="field">Recipient Ethereum address<input name="wallet" required pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button" ${qrReady?'':'disabled'}>Mint POAP</button></form><p role="status">${esc(mintReason)} Mint window: ${date(mintStart)} ${time(mintStart)} – ${date(mintEnd)} ${time(mintEnd)}.</p><h2>Event moderation</h2><p>Moderation applies to every role of this event. On-chain pause changes are queued through the relayer. Badge artwork and the mint window are frozen on chain and cannot be edited.</p><div class="form-actions"><button class="button button-light button-small" data-admin="verify">Accept / mark verified</button><button class="button button-light button-small" data-admin="pause">Pause minting</button><button class="button button-light button-small" data-admin="resume">Resume minting</button></div><form id="reject-event"><label class="field">Rejection reason<textarea name="reason" required maxlength="1000"></textarea></label><button class="button button-danger">Reject event</button></form></section>`:''}${(adminView||creator)&&!event.deleted?`<section class="panel"><h2>Edit event details</h2><form id="edit-event"><label class="field">Title<input name="title" value="${esc(event.title)}" required maxlength="100"></label><label class="field">Description<textarea name="description" required maxlength="1000">${esc(event.description)}</textarea></label><label class="field">Venue<input name="venue" value="${esc(event.venue)}" required maxlength="300"></label><label class="field">Category<select name="category">${config.categories.map(c=>`<option ${c===event.category?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label class="field">Organization<input name="club" value="${esc(event.club||'')}" required minlength="2" maxlength="80"></label><label class="field">Campus<input name="campus" value="${esc(event.campus||'')}" maxlength="100"></label><label class="field">Event starts<input name="eventStartsAt" type="datetime-local" required value="${localInput(event.startsAt)}"></label><label class="field">Event ends<input name="eventEndsAt" type="datetime-local" required value="${localInput(event.endsAt)}"></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="${esc(event.approximateAttendees||1)}"></label><p>These changes update the event listing. Published POAP artwork, badge metadata, supply and mint dates stay permanent.</p><button class="button button-dark">Save event details</button></form></section>`:''}${creator&&!event.deleted?`<section class="panel"><h2>Delete event listing</h2><p>Removes every role of this event from discovery and blocks new claims. Existing POAPs, artwork and transaction history stay permanent. A mint already submitted may confirm before the pause.</p><form id="delete-event"><label class="checkbox"><input type="checkbox" required><span>I want to remove this event listing and stop new mint requests.</span></label><button class="button button-danger">Delete event</button></form></section>`:''}`;
+   content.innerHTML=`${adminView?`<section class="panel" aria-label="POAP request review"><h2>POAP requests · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Address</th><th>Status</th><th>Actions</th></tr></thead><tbody>${requests.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(row.status)}${row.mint_status?` · ${esc(row.mint_status)}`:''}${row.error?`<small>${esc(row.error)}</small>`:''}</td><td>${row.status==='pending'?`<button class="button button-small" data-request="${esc(row.id)}" data-decision="accept" ${qrReady?'':'disabled'}>Accept & mint</button><button class="button button-danger button-small" data-request="${esc(row.id)}" data-decision="reject">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="3">No POAP requests yet.</td></tr>'}</tbody></table></div><div id="request-pages"></div></section>`:''}<div class="stats claim-stats">${[['Links issued',stats.linksIssued],['Links used',stats.linksUsed],['QR claims',stats.qrClaims],['Minted',stats.minted],['Pending',stats.pending],['Failed',stats.failed],['Cap remaining',stats.capRemaining??'Unlimited']].map(([name,value])=>`<div class="stat"><small>${name}</small><strong>${esc(value)}</strong></div>`).join('')}</div><div class="form-actions">${event.roles[0].toLowerCase()==='attendee'?`<button id="walk-in" class="button" ${qrReady?'':'disabled'}>Walk-in QR</button>`:''}<button id="refresh-dashboard" class="button button-light">Refresh</button><a class="button button-light" href="/api/events/${id}/export" download>Export transactions CSV</a></div><p>Walk-in QR is available for Attendees during the mint window, while minting is active and supply remains. Recipient links can be prepared now and redeemed during that window.</p><h2>Public mint link</h2><p>Share this link with participants. Each wallet can mint this role once after event approval.</p><input aria-label="Public mint link" readonly value="${esc(location.origin)}/#drop/${esc(id)}"><h2>Single-use recipient links</h2><p>A link works for whoever opens it first. Emails are private to you and the super admin and are deleted after ${esc(config.emailRetentionDays||30)} days, or on request. Save links when issued: only their hashes are stored.</p><form id="recipients-form"><label class="field">Paste email,role CSV (or enter one person per line)<textarea name="recipients" required placeholder="email,role&#10;person@example.org,Attendee"></textarea></label><label class="field">Or upload CSV<input id="recipient-file" type="file" accept=".csv,text/csv"></label><button class="button">Create links</button></form><div id="issued-links"></div><button class="button button-light" id="erase-emails">Delete all emails for this role</button><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Email</th><th>State</th><th>Actions</th></tr></thead><tbody>${links.map(link=>`<tr><td>${esc(link.email||'Email deleted')}</td><td>${esc(link.revoked_at?'Revoked':link.state)}</td><td>${link.state==='issued'?`<button class="button button-light button-small" data-regenerate="${esc(link.id)}">Regenerate</button><button class="button button-light button-small" data-revoke="${esc(link.id)}">Revoke</button>`:''}<button class="button button-light button-small" data-delete-email="${esc(link.id)}">Delete email</button></td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">No recipient links yet. Add recipients above to get started.</td></tr>'}</tbody></table></div><div id="link-pages"></div><h2>Transactions · ${esc(event.roles[0])}</h2><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Wallet</th><th>Role</th><th>Claim method</th><th>Token</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>${transactions.rows.map(row=>`<tr><td>${esc(row.wallet)}</td><td>${esc(event.roles[0])}</td><td>${esc(row.method)}</td><td>${esc(row.token_id||'—')}</td><td>${esc(row.status)}${row.error?`<small>${esc(row.error)}</small>`:''}${row.status==='failed'?` <button class="button button-light button-small" data-retry="${esc(row.id)}">Retry</button>`:''}</td><td>${date(row.created_at)} ${time(row.created_at)}</td><td>${row.tx_hash?`<a href="${txLink(row.tx_hash)}" target="_blank" rel="noopener">Etherscan ↗</a>`:'Queued'}</td></tr>`).join('')||'<tr><td colspan="7" class="table-empty">No claims yet. Transactions will appear here when participants mint.</td></tr>'}</tbody></table></div><div id="transaction-pages"></div>${adminView&&!event.deleted?`<section class="panel admin-event-tools"><h2>Mint POAP to an address</h2><p>Mint the selected role directly to a recipient. POAPs are permanent and cannot be transferred or burned. Check the address before minting.</p><form id="direct-mint"><label class="field">Recipient Ethereum address<input name="wallet" required pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button" ${qrReady?'':'disabled'}>Mint POAP</button></form><p role="status">${esc(mintReason)} Mint window: ${date(mintStart)} ${time(mintStart)} – ${date(mintEnd)} ${time(mintEnd)}.</p><h2>Event moderation</h2><p>Moderation applies to every role of this event. On-chain pause changes are queued through the relayer. Badge artwork and the mint window are frozen on chain and cannot be edited.</p><div class="form-actions"><button class="button button-light button-small" data-admin="verify">Accept / mark verified</button><button class="button button-light button-small" data-admin="pause">Pause minting</button><button class="button button-light button-small" data-admin="resume">Resume minting</button></div><form id="reject-event"><label class="field">Rejection reason<textarea name="reason" required maxlength="1000"></textarea></label><button class="button button-danger">Reject event</button></form></section>`:''}${(adminView||creator)&&!event.deleted?`<section class="panel"><h2>Edit event details</h2><form id="edit-event"><label class="field">Title<input name="title" value="${esc(event.title)}" required maxlength="100"></label><label class="field">Description<textarea name="description" required maxlength="1000">${esc(event.description)}</textarea></label><label class="field">Venue<input name="venue" value="${esc(event.venue)}" required maxlength="300"></label><label class="field">Category<select name="category">${config.categories.map(c=>`<option ${c===event.category?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label class="field">Organization<input name="club" value="${esc(event.club||'')}" required minlength="2" maxlength="80"></label><label class="field">Campus<input name="campus" value="${esc(event.campus||'')}" maxlength="100"></label><label class="field">Event starts<input name="eventStartsAt" type="datetime-local" required value="${localInput(event.startsAt)}"></label><label class="field">Event ends<input name="eventEndsAt" type="datetime-local" required value="${localInput(event.endsAt)}"></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="${esc(event.approximateAttendees||1)}"></label><p>These changes update the event listing. Published POAP artwork, badge metadata, supply and mint dates stay permanent.</p><button class="button button-dark">Save event details</button></form></section>`:''}${creator&&!event.deleted?`<section class="panel"><h2>Delete event listing</h2><p>Removes every role of this event from discovery and blocks new claims. Existing POAPs, artwork and transaction history stay permanent. A mint already submitted may confirm before the pause.</p><form id="delete-event"><label class="checkbox"><input type="checkbox" required><span>I want to remove this event listing and stop new mint requests.</span></label><button class="button button-danger">Delete event</button></form></section>`:''}`;
    content.dataset.editing='false';content.oninput=()=>{content.dataset.editing='true';};
    content.querySelector('#walk-in')?.addEventListener('click',()=>shareDrop(event));
    content.querySelector('#refresh-dashboard').onclick=select.onchange;
    pageControls(content.querySelector('#transaction-pages'),page,transactions.hasMore,'Transactions',value=>{page=value;select.onchange();});
    pageControls(content.querySelector('#link-pages'),linksPage,recipientPage.hasMore,'Recipient links',value=>{linksPage=value;select.onchange();});
    function issued(rows) {
+    content.dataset.editing='true';
     const node=content.querySelector('#issued-links');
     node.innerHTML=`<button id="export-links" class="button">Export new links CSV</button>${rows.map((row,index)=>`<p>${esc(row.email||'Email deleted')} · ${esc(row.role)} <button class="button button-light button-small" data-copy-link="${index}">Copy link</button><a href="mailto:${encodeURIComponent(row.email||'')}?subject=${encodeURIComponent(event.title)}&body=${encodeURIComponent(row.link)}">Open in my mail</a></p>`).join('')}<p>Save this export now. Links are unavailable after leaving this page; regenerate to issue a replacement.</p>`;
     node.querySelector('#export-links').onclick=()=>downloadCSV('recipient-links.csv',[['email','role','link'],...rows.map(row=>[row.email,row.role,row.link])]);
@@ -488,7 +491,14 @@ async function organizer(version,adminView=false) {
     content.querySelector('#reject-event').onsubmit=e=>{e.preventDefault();busy(e.target.querySelector('button'),()=>change({action:'reject',reason:e.target.elements.reason.value}));};
 
    }
-  }catch(error){if(version===renderId)content.innerHTML=`<p role="alert">${esc(error.message)}</p>`;}
+  }catch(error){
+   if(version===renderId && Number(select.value)===id){
+    let notice=content.querySelector('#dashboard-error');
+    if(!notice){notice=document.createElement('div');notice.id='dashboard-error';notice.className='notice';content.prepend(notice);}
+    notice.innerHTML=`<p role="alert">Dashboard refresh failed. ${esc(error.message)}</p><button class="button button-small" id="retry-dashboard">Retry</button>`;
+    notice.querySelector('button').onclick=()=>select.onchange();
+   }
+  }
  };
  const requested=Number(location.hash.split('/')[2]);select.value=String(workspace.events.find(event=>event.id===requested)?.id||workspace.events[0].id);await select.onchange();
 }
@@ -518,7 +528,7 @@ function renderSystemPanel(node,{system,health,audit,workspace,auditPage},onPage
  pageControls(node.querySelector('#audit-pages'),auditPage,audit?.hasMore,'Activity',onPage);
 }
 async function organizerStudio(version,adminView=false) {
- main.innerHTML=`<header class="studio-heading"><div><h1>${adminView?'Super admin panel.':'Organizer studio.'}</h1><p>${adminView?'You are signed in as superadmin. Review POAP requests across all events.':'Your events. Your designs. Your people.'}</p></div>${session?'<a class="button button-dark" href="#create">Create an event ↗</a>':''}</header><nav class="section-tabs" aria-label="Organizer workspace"><a href="#${adminView?'admin':'issuer/studio'}" aria-current="page">${adminView?'All events':'Your events'}</a><a href="#${adminView?'admin/events':'issuer/manage'}">${adminView?'Review POAP requests':'Manage claims'}</a>${adminView?'<button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>':''}<a href="#issuer/guide">Organizer guide</a></nav>${session?`<div class="studio-layout ${adminView?'with-admin':''}"><section class="studio-main" aria-label="Your events"><div id="studio-events" role="status"><p class="loading">Loading your events…</p></div><div id="studio-pages"></div></section>${adminView?'<aside id="studio-system" class="studio-system" aria-label="Admin system overview"><section class="system-panel"><p class="loading">Checking Sepolia and the relayer…</p></section></aside>':''}</div>`:`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your next event starts here.</h2><p>Sign in with MetaMask to create events, manage your badges and distribute claims from one workspace.</p><button class="button button-dark" id="studio-sign-in">Connect MetaMask</button></section>`}`;
+ main.innerHTML=`<header class="studio-heading"><div><h1>${adminView?'Super admin panel.':'Organizer studio.'}</h1><p>${adminView?'You are signed in as superadmin. Review POAP requests across all events.':'Your events. Your designs. Your people.'}</p></div>${session?'<a class="button button-dark" href="#create">Create an event ↗</a>':''}</header><nav class="section-tabs" aria-label="Organizer workspace"><a href="#${adminView?'admin':'issuer/studio'}" aria-current="page">${adminView?'All events':'Your events'}</a><a href="#${adminView?'admin/events':'issuer/manage'}">${adminView?'Review POAP requests':'Manage claims'}</a>${adminView?'<button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>':''}<a href="#issuer/guide">Organizer guide</a></nav>${session?`<div class="studio-layout ${adminView?'with-admin':''}"><section class="studio-main" aria-label="Your events"><div id="studio-events">${loadingMarkup('Loading your events')}</div><div id="studio-pages"></div></section>${adminView?'<aside id="studio-system" class="studio-system" aria-label="Admin system overview"><section class="system-panel"><p class="loading">Checking Sepolia and the relayer…</p></section></aside>':''}</div>`:`<section class="studio-empty"><div class="studio-empty-art">${doodle('flower')}</div><h2>Your next event starts here.</h2><p>Sign in with MetaMask to create events, manage your badges and distribute claims from one workspace.</p><button class="button button-dark" id="studio-sign-in">Connect MetaMask</button></section>`}`;
  if(adminView){
   main.querySelector('.section-tabs').innerHTML='<a href="#admin" aria-current="page">Review requests & events</a><a href="#admin/activity">Activity</a><button id="refresh-admin-events" class="button button-light button-small">Refresh requests</button>';
   main.querySelector('#studio-system').remove();main.querySelector('.studio-layout').classList.remove('with-admin');
@@ -557,7 +567,7 @@ async function adminActivity(version) {
   try {const rows=await api(`/admin/audit?page=${page}`,{quiet:true});if(version!==renderId)return;auditPage=page;audit=rows;draw();}catch(error){toast(error.message);}
  });
  if(session?.superAdmin&&system?.panelAdmins){
-  node.insertAdjacentHTML('beforeend',`<section class="system-panel"><h2>Panel access</h2><p>Grant or revoke admin panel access with your superadmin wallet. Delegates can review requests and manage events; they cannot grant access to others or transfer the superadmin role. This action requires a Sepolia transaction from your wallet.</p><form id="panel-admin-form"><label class="field">Wallet address<input name="wallet" required placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button">Grant panel access</button></form><div class="table-wrap"><table><thead><tr><th>Admin wallet</th><th>Action</th></tr></thead><tbody>${system.panelAdmins.map(wallet=>`<tr><td>${esc(wallet)}</td><td><button class="button button-light button-small" data-revoke-panel="${esc(wallet)}">Revoke</button></td></tr>`).join('')||'<tr><td colspan="2">No delegated admins yet.</td></tr>'}</tbody></table></div></section>`);
+  node.insertAdjacentHTML('beforeend',`<section class="system-panel"><h2>Panel access</h2><p>Grant or revoke admin panel access with your superadmin wallet. Delegates can review requests and manage events; they cannot grant access to others or transfer the superadmin role. This action requires a Sepolia transaction from your wallet.</p><form id="panel-admin-form"><label class="field">Wallet address<input name="wallet" required placeholder="0x…" autocomplete="off" spellcheck="false"></label><button class="button">Grant panel access</button></form><div class="table-wrap" role="region" aria-label="Scrollable data table" tabindex="0"><table><thead><tr><th>Admin wallet</th><th>Action</th></tr></thead><tbody>${system.panelAdmins.map(wallet=>`<tr><td>${esc(wallet)}</td><td><button class="button button-light button-small" data-revoke-panel="${esc(wallet)}">Revoke</button></td></tr>`).join('')||'<tr><td colspan="2">No delegated admins yet.</td></tr>'}</tbody></table></div></section>`);
   const change=async(wallet,allowed)=>{
    wallet=getAddress(wallet.trim());
    if(wallet.toLowerCase()===session.wallet.toLowerCase())throw Error('The superadmin already has panel access.');
@@ -587,9 +597,17 @@ function adminLogin() {
 }
 
 function createEventPage() {
-  main.innerHTML = `<a class="back-link" href="#${session?.admin?'admin':'issuer/studio'}">← Back to ${session?.admin?'admin dashboard':'studio'}</a><div class="eyebrow">ORGANIZER STUDIO / EVENT EDITOR</div><h1 class="page-title">Give your event a little forever.</h1><p class="lead">Your artwork. Your community. A collectible for everyone who shows up.</p><div class="notice"><a href="#${session?.admin?'admin':'issuer/studio'}">${session?.admin?'Superadmin dashboard':'Back to my studio'} ↗</a> · <a href="#${session?.admin?'admin/events':'issuer/manage'}">${session?.admin?'Review POAP requests':'Manage attendance'} ↗</a><br>Publish immediately with sponsored gas. Badge artwork and the mint window are frozen on chain and cannot be edited.</div><form id="event-form" class="panel"><div class="form-grid"><label class="field">Event title<input name="title" required minlength="3" maxlength="100" placeholder="Your event name"></label><label class="field">Club or community<input name="club" required minlength="2" maxlength="80" placeholder="The Coding Club"></label><label class="field field-full">Description<textarea name="description" required minlength="3" maxlength="1000" placeholder="What makes this moment special?"></textarea></label><label class="field">Category<select name="category">${(config.categories || []).map(name => `<option>${esc(name)}</option>`).join('')}</select></label><label class="field">Campus<input name="campus" maxlength="100" placeholder="Campus name"></label><label class="field">Participation roles<input name="roles" value="Attendee" maxlength="320"><small>Comma-separated, up to 8 roles. Each has its own badge and cap.</small></label><label class="field">Venue<input name="venue" required minlength="2" maxlength="300" placeholder="Innovation Lab, Block A"></label><label class="field">Event starts<input name="starts" type="datetime-local" required></label><label class="field">Event ends<input name="eventEnds" type="datetime-local" required></label><label class="field">Minting opens<input name="mintStarts" type="datetime-local" required></label><label class="field">Minting closes<input name="ends" type="datetime-local" required><small>Allow time after the event for queued mints to confirm.</small></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="50"></label><label class="field field-full">Collectible artwork<small>Choose a design for each role below, or explicitly generate POAPs from your event description.</small></label><div id="role-designs" class="field-full role-designs"></div></div><p class="muted">Use artwork you have permission to publish. Published collectible metadata is permanent.</p><div class="form-actions"><button class="button" id="publish-button" type="submit">Publish event ↗</button><button type="button" class="text-link" id="clear-artwork">Clear design & upload</button></div><div id="publish-status" class="publication-progress" role="status"></div></form>`;
+  main.innerHTML = `<a class="back-link" href="#${session?.admin?'admin':'issuer/studio'}">← Back to ${session?.admin?'admin dashboard':'studio'}</a><div class="eyebrow">ORGANIZER STUDIO / EVENT EDITOR</div><h1 class="page-title">Give your event a little forever.</h1><p class="lead">Your artwork. Your community. A collectible for everyone who shows up.</p><div class="notice"><a href="#${session?.admin?'admin':'issuer/studio'}">${session?.admin?'Superadmin dashboard':'Back to my studio'} ↗</a> · <a href="#${session?.admin?'admin/events':'issuer/manage'}">${session?.admin?'Review POAP requests':'Manage attendance'} ↗</a><br>Publish immediately with sponsored gas. Badge artwork and the mint window are frozen on chain and cannot be edited.</div><form id="event-form" class="panel"><div class="draft-toolbar"><p id="draft-status" role="status">Your event details are saved in this tab as you type.</p><button type="button" class="text-link" id="discard-event-draft">Clear form</button></div><div class="form-grid"><label class="field">Event title<input name="title" required minlength="3" maxlength="100" placeholder="Your event name"></label><label class="field">Club or community<input name="club" required minlength="2" maxlength="80" placeholder="The Coding Club"></label><label class="field field-full">Description<textarea name="description" required minlength="3" maxlength="1000" placeholder="What makes this moment special?"></textarea></label><label class="field">Category<select name="category">${(config.categories || []).map(name => `<option>${esc(name)}</option>`).join('')}</select></label><label class="field">Campus<input name="campus" maxlength="100" placeholder="Campus name"></label><label class="field">Participation roles<input name="roles" value="Attendee" maxlength="320"><small>Comma-separated, up to 8 roles. Each has its own badge and cap.</small></label><label class="field">Venue<input name="venue" required minlength="2" maxlength="300" placeholder="Innovation Lab, Block A"></label><label class="field">Event starts<input name="starts" type="datetime-local" required></label><label class="field">Event ends<input name="eventEnds" type="datetime-local" required></label><label class="field">Minting opens<input name="mintStarts" type="datetime-local" required></label><label class="field">Minting closes<input name="ends" type="datetime-local" required><small>Allow time after the event for queued mints to confirm.</small></label><label class="field">Approximate attendees<input name="approximateAttendees" type="number" min="1" max="100000" required value="50"></label><label class="field field-full">Collectible artwork<small>Choose a design for each role below, or explicitly generate POAPs from your event description.</small></label><div id="role-designs" class="field-full role-designs"></div></div><p class="muted">Use artwork you have permission to publish. Published collectible metadata is permanent.</p><div class="form-actions"><button class="button" id="publish-button" type="submit">Publish event ↗</button><button type="button" class="text-link" id="clear-artwork">Clear design & upload</button></div><div id="publish-status" class="publication-progress" role="status"></div></form>`;
   const form = main.querySelector('form');
+  let draftStorage;
+  try { draftStorage = window.sessionStorage; } catch { /* Storage can be disabled in private browsers. */ }
+  const draft = preserveEventDraft(form, draftStorage, form.querySelector('#draft-status'));
+  form.querySelector('#discard-event-draft').onclick = () => {
+    if (!window.confirm('Clear your event details and artwork?')) return;
+    draft.clear(); createEventPage();
+  };
   const designs = new Map();
+  const draftCaps = new Map([...new Set(String(draft.values.roles || '').split(',').map(role=>role.trim()).filter(Boolean))].map((role,index)=>[role,draft.values[`drops-${index}`]]));
   const roles = () => {
     const values = [...new Set(form.elements.roles.value.split(',').map(role => role.trim()).filter(Boolean))];
     if (!values.length || values.length > 8 || values.some(role => role.length > 40)) throw Error('Choose 1–8 roles, each up to 40 characters.');
@@ -617,9 +635,9 @@ function createEventPage() {
     try { values = roles(); } catch (error) { toast(error.message); return; }
     const container = form.querySelector('#role-designs');
     if(!container?.isConnected)return;
-    container.innerHTML = values.map((role,index) => `<section class="role-design"><h3>${esc(role)} POAP</h3><label class="field">Approximate number of drops<input name="drops-${index}" type="number" min="1" max="10000" step="1" required value="${esc(designs.get(role)?.cap ?? 50)}"><small>This sets the maximum POAP supply for ${esc(role)}.</small></label><label class="field">Custom design<input name="${index === 0 ? 'artwork' : `artwork-${index}`}" type="file" accept="image/png,image/jpeg,video/mp4,video/webm"></label><img ${index === 0 ? 'id="art-preview"' : ''} alt="${esc(role)} POAP preview"><video ${index === 0 ? 'id="video-preview"' : ''} controls playsinline preload="metadata" hidden aria-label="${esc(role)} video preview"></video><div class="form-actions"><button type="button" class="button button-light" data-generate-role="${index}">Generate POAP ✧</button><button type="button" class="text-link" data-clear-role="${index}">Clear design</button></div></section>`).join('');
+    container.innerHTML = values.map((role,index) => `<section class="role-design"><h3>${esc(role)} POAP</h3><label class="field">Approximate number of drops<input name="drops-${index}" type="number" min="1" max="10000" step="1" required value="${esc(designs.get(role)?.cap ?? draftCaps.get(role) ?? 50)}"><small>This sets the maximum POAP supply for ${esc(role)}.</small></label><label class="field">Custom design<input name="${index === 0 ? 'artwork' : `artwork-${index}`}" type="file" accept="image/png,image/jpeg,video/mp4,video/webm"></label><img width="512" height="512" ${index === 0 ? 'id="art-preview"' : ''} alt="${esc(role)} POAP preview"><video width="512" height="512" ${index === 0 ? 'id="video-preview"' : ''} controls playsinline preload="metadata" hidden aria-label="${esc(role)} video preview"></video><div class="form-actions"><button type="button" class="button button-light" data-generate-role="${index}">Generate POAP ✧</button><button type="button" class="text-link" data-clear-role="${index}">Clear design</button></div></section>`).join('');
     values.forEach((role,index) => {
-      if (!designs.has(role)) designs.set(role,{version:0,cap:50});
+      if (!designs.has(role)) designs.set(role,{version:0,cap:draftCaps.get(role) ?? 50});
       const state = designs.get(role), node = container.children[index], image = node.querySelector('img'), video = node.querySelector('video');
       if (state.image || state.generated?.image) image.src = state.image || state.generated.image;
       if (state.video || state.generated?.animationUrl) { video.src = state.video || state.generated.animationUrl; video.hidden = false; }
@@ -660,7 +678,7 @@ function createEventPage() {
    const node=main.querySelector('#publish-status');if(!node)return;
    const result=await api(`/publications/${id}`);if(!node.isConnected)return;
    node.innerHTML=result.status==='live'?'Event published.':result.status==='failed'?'Publication failed. Check your organizer dashboard.':loadingMarkup('Publishing your event');
-   if(result.status==='live'){localStorage.removeItem(pendingKey);events=await api('/events');location.hash=`${session?.admin?'admin/events':'issuer/manage'}/${result.events[0].id}`;toast(session?.admin?'Event published. POAP requests will appear here for your review.':'Event published. Share the Walk-in QR or create single-use recipient links from your dashboard.');}
+   if(result.status==='live'){draft.clear();localStorage.removeItem(pendingKey);events=await api('/events');location.hash=`${session?.admin?'admin/events':'issuer/manage'}/${result.events[0].id}`;toast(session?.admin?'Event published. POAP requests will appear here for your review.':'Event published. Share the Walk-in QR or create single-use recipient links from your dashboard.');}
    else if(result.status!=='failed')ticketTimer=setTimeout(()=>followPublication(id).catch(error=>{if(node.isConnected)node.textContent=error.message;}),10000);
   }
   let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{localStorage.removeItem(pendingKey);}
@@ -685,6 +703,11 @@ function createEventPage() {
    if(!form.isConnected)return;
    if(localStorage.getItem(pendingKey))throw Error('Resume the saved publication or choose Clear draft & start new.');
    const f=form.elements,seconds=name=>Math.floor(new Date(f[name].value).getTime()/1000);
+   if (![seconds('starts'),seconds('eventEnds'),seconds('mintStarts'),seconds('ends')].every(Number.isFinite) || seconds('starts') >= seconds('eventEnds') || seconds('mintStarts') >= seconds('ends')) {
+     const message = 'Set an end time after the start for both the event and minting window.';
+     form.querySelector('#publish-status').textContent = message;
+     throw Error(message);
+   }
    const publishStatus=form.querySelector('#publish-status');publishStatus.innerHTML=loadingMarkup('Publishing your event');
    let artwork;try {artwork=await media();}catch(error){publishStatus.textContent=error.message;throw error;}
    if(!form.isConnected)return;
@@ -705,12 +728,23 @@ function createEventPage() {
 }
 
 function about() { main.innerHTML = aboutContent(location.hash); }
-async function render() {
+function homeVisible() { return !location.hash || ['#main','#collectibles','#how-it-works'].includes(location.hash); }
+async function render(focusPage = false) {
+  const requestedHash = location.hash;
   if (!initialized) return;
   const ticket = pageLoader.begin();
   try { await renderPage(); }
   catch (error) { retryNotice(error, render); }
-  finally { await pageLoader.finish(ticket, !location.hash || ['#main','#collectibles','#how-it-works'].includes(location.hash) ? [homeAssets] : []); }
+  finally {
+    await pageLoader.finish(ticket);
+    if (requestedHash === location.hash) {
+      const heading = document.querySelector(homeVisible() ? '#hero-title' : '#live-app h1, #live-app h2, #live-app h3');
+      const title = homeVisible() ? 'Keep your moments' : heading?.textContent.replace(/\s+/g, ' ').trim() || 'Kairo';
+      document.title = `${title} — Kairo`;
+      document.querySelector('#route-status').textContent = title;
+      if (focusPage && !modal.open) document.querySelector('#main').focus?.({preventScroll:true});
+    }
+  }
 }
 async function renderPage() {
   clearInterval(pageTimer); clearTimeout(ticketTimer); ticketView++; drawEvents = null; close();
@@ -718,12 +752,17 @@ async function renderPage() {
   const hash = location.hash.slice(1);
   const routes = { events:'explore', gallery:'collection', organize:'studio', 'collector/gallery': 'explore', 'collector/collection': 'collection', 'collector/collectors': 'profile', 'builders/build': 'documentation', 'builders/documentation': 'documentation', 'issuer/guide': 'issuer-guide', 'issuer/studio': 'studio', 'issuer/manage': 'organizer' };
   const route = hash.startsWith('issuer/manage/') ? 'organizer' : hash.startsWith('guide-') ? 'issuer-guide' : hash.startsWith('doc-') ? 'documentation' : routes[hash] || hash.split('/')[0];
-  all('.desktop-nav a, #mobile-nav a').forEach(link => { const active = link.hash === location.hash || link.getAttribute('href') === location.hash; if (active) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current'); });
+  const section = ['badge','profile'].includes(route) ? 'collection' : ['organizer','create','admin'].includes(route) ? 'studio' : route;
+  all('.desktop-nav a, #mobile-nav a').forEach(link => {
+    const target = link.getAttribute('href').slice(1);
+    const active = (routes[target] || target.split('/')[0]) === section;
+    if (active) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current');
+  });
   const home = !hash || ['main','collectibles','how-it-works'].includes(hash);
   document.querySelectorAll('[data-home]').forEach(node => { node.hidden = !home; });
   main.hidden = home;
   if (apiError && (home || ['explore','drop'].includes(route))) { main.hidden = false; main.innerHTML = `${empty('Live service unavailable', apiError)}<button class="button" id="retry-api">Retry connection</button>`; main.querySelector('button').onclick = init; return; }
-  if (home) { renderCards(); pageTimer = setInterval(async () => { if (document.hidden || modal.open || version !== renderId) return; try { events = await api('/events'); apiError = ''; if (version === renderId) { connectionState(); renderCards(); } } catch (error) { apiError = error.message; renderCards(); } }, 15000); return; }
+  if (home) { if (!homeArtMounted) { homeArtMounted = true; mountHomeArt(document, window); } renderCards(); pageTimer = setInterval(async () => { if (document.hidden || modal.open || version !== renderId) return; try { events = await api('/events'); apiError = ''; if (version === renderId) { connectionState(); renderCards(); } } catch (error) { apiError = error.message; renderCards(); } }, 15000); return; }
   if (route === 'collection' || route === 'badge' || route === 'profile') await collection(version, route === 'profile');
   else if (route === 'admin') {
     if(!session?.admin||hash==='admin/login') adminLogin();
@@ -749,12 +788,15 @@ async function renderPage() {
     if(id){
      try {const event=events.find(e=>e.id===id)||await api(`/events/${id}`);if(version!==renderId)return;
       if(Date.now()/1000>event.mintEndsAt)showEvent(event);else claimForm(event,true);
-     }catch(error){if(version===renderId)toast(error.message);}
+     }catch(error){if(version===renderId){
+      main.innerHTML=`${empty('Event unavailable',error.message)}<button class="button" id="retry-event">Retry</button>`;
+      main.querySelector('#retry-event').onclick=()=>render();
+     }}
     }
   }
   pageTimer = setInterval(async () => {
     if (document.hidden || modal.open || version !== renderId) return;
-    try { events = await api('/events'); if (version !== renderId) return; apiError = ''; connectionState(); drawEvents?.(); const staff = main.querySelector('#staff-event'); if (staff?.value&&main.querySelector('#staff-content')?.dataset.editing!=='true') await staff.onchange(); }
+    try { events = await api('/events'); if (version !== renderId) return; apiError = ''; connectionState(); drawEvents?.(); const staff = main.querySelector('#staff-event'); if (staff?.value&&main.querySelector('#staff-content')?.dataset.editing!=='true') await staff.onchange({background:true}); }
     catch (error) { const node = document.querySelector('#connection-state'); node.hidden = false; node.textContent = `Live refresh unavailable: ${error.message}`; }
   }, 15000);
 }
@@ -762,14 +804,15 @@ async function renderPage() {
 function renderCards() {
   const grid = document.querySelector('#badge-grid');
   const visible = events.filter(event => eventState(event) === 'Past event' && (filter === 'all' || (filter === 'art' ? event.category === 'Arts' : filter === 'community' ? event.category === 'Community' : event.category !== 'Arts' && event.category !== 'Community')));
-  grid.innerHTML = apiError ? empty('Live events unavailable', apiError) : visible.length ? visible.map(event => card(event)).join('') : empty('No events yet', 'Published events will appear here.');
+  grid.innerHTML = apiError ? empty('Live events unavailable', apiError) : visible.length ? visible.map(event => card(event)).join('') : empty(filter === 'all' ? 'No events yet' : 'No moments in this category yet', filter === 'all' ? 'Published events will appear here.' : 'Choose another category to explore more memories.');
   const count = document.querySelector('[data-filter="all"] span'); if (count) count.textContent = events.filter(event => eventState(event) === 'Past event').length;
 }
 let filter = 'all';
 function explore() {
-  main.innerHTML = `<h1>Discover events</h1><label class="field">Search events<span class="event-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="live-search" type="search" placeholder="Event, campus, organizer…"></span></label><label class="field">Category<select id="live-category"><option>All events</option>${(config.categories || []).map(c => `<option>${esc(c)}</option>`).join('')}</select></label><div id="live-events"></div>`;
+  main.innerHTML = `<h1 class="page-title">Discover events</h1><p class="lead">Find a moment worth keeping. Search by event, campus or organizer.</p><div class="discovery-filters"><label class="field">Search events<span class="event-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="live-search" type="search" placeholder="Event, campus, organizer…"></span></label><label class="field">Category<select id="live-category"><option>All events</option>${(config.categories || []).map(c => `<option>${esc(c)}</option>`).join('')}</select></label></div><p id="event-results" class="muted" role="status" aria-live="polite"></p><div id="live-events"></div>`;
   drawEvents = () => {
     const visible = events.filter(e => matchesEvent(e, {search: main.querySelector('#live-search').value, category: main.querySelector('#live-category').value, period: 'all'}));
+    main.querySelector('#event-results').textContent = `${visible.filter(event => eventState(event) === 'Past event').length} past events found`;
     main.querySelector('#live-events').innerHTML = [['Past event','Past events']].map(([state,label]) => {
       const rows = visible.filter(e => eventState(e) === state);
       return `<section class="event-period"><h2>${label}</h2>${rows.length ? `<div class="grid">${rows.map(e => card(e)).join('')}</div>` : empty(`No ${label.toLowerCase()}`, 'Try another search or category, or check back soon.')}</section>`;
@@ -807,23 +850,34 @@ all('.filter-tab').forEach(button => button.addEventListener('click', () => {
 }));
 $('#surprise-me')?.addEventListener('click', () => { const past = events.filter(event => eventState(event) === 'Past event'); if (past.length) showEvent(past[Math.floor(Math.random() * past.length)]); else toast('No past events available'); });
 const menu = $('.menu-button');
-menu?.addEventListener('click', () => {
-  const opening = menu.getAttribute('aria-expanded') !== 'true';
-  menu.setAttribute('aria-expanded', String(opening));
-  menu.setAttribute('aria-label', opening ? 'Close navigation' : 'Open navigation');
-  const mNav = $('#mobile-nav');
-  if (mNav) mNav.hidden = !opening;
-});
-all('#mobile-nav a, #mobile-nav button').forEach(link => link.addEventListener('click', () => {
+function closeMenu(restoreFocus = false) {
+  const wasOpen = menu?.getAttribute('aria-expanded') === 'true';
   menu?.setAttribute('aria-expanded', 'false');
   menu?.setAttribute('aria-label', 'Open navigation');
-  const mNav = $('#mobile-nav');
-  if (mNav) mNav.hidden = true;
-}));
+  const nav = $('#mobile-nav');
+  if (nav) nav.hidden = true;
+  if (restoreFocus && wasOpen) menu.focus();
+}
+menu?.addEventListener('click', () => {
+  const opening = menu.getAttribute('aria-expanded') !== 'true';
+  if (!opening) { closeMenu(); return; }
+  menu.setAttribute('aria-expanded', 'true');
+  menu.setAttribute('aria-label', 'Close navigation');
+  $('#mobile-nav').hidden = false;
+});
+all('#mobile-nav a, #mobile-nav button').forEach(link => link.addEventListener('click', () => closeMenu()));
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(true); });
+document.addEventListener('click', event => {
+  if (!event.target.closest('#mobile-nav, .menu-button')) closeMenu();
+});
+document.addEventListener('focusin', event => {
+  if (!event.target.closest('#mobile-nav, .menu-button')) closeMenu();
+});
+window.addEventListener('resize', () => { if (window.innerWidth > 1000) closeMenu(); });
 
 $('#create-button')?.addEventListener('click', () => { location.hash = 'issuer/studio'; });
 
-window.addEventListener('hashchange', () => { if (!/^#(?:doc|guide)-/.test(location.hash)) window.scrollTo({top:0,behavior:'instant'}); render(); });
+window.addEventListener('hashchange', () => { if (!/^#(?:doc|guide)-/.test(location.hash)) window.scrollTo({top:0,behavior:'instant'}); closeMenu(); render(true); });
 
 function connectionState() {
   const offline = !navigator.onLine;
@@ -855,9 +909,5 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 document.querySelector('#install-app')?.addEventListener('click', async () => { await installPrompt?.prompt(); document.querySelector('#install-app').hidden = true; installPrompt = null; });
 
 $('.coin-fallback').innerHTML = badgeSvg('flower', 'fallback', 'GOOD TIMES GROW HERE');
-const homeAssets = Promise.allSettled([
-  mountCoin($('#coin-stage'), $('#spin-coin'), $('#pause-motion')),
-  Promise.resolve().then(() => mountPress($('#press-art'), $('#press-button'), $('#press-readout')))
-]);
 init();
 document.addEventListener('poap-motion', event => { $('#pause-motion').setAttribute('aria-pressed', String(event.detail)); $('#pause-motion').setAttribute('aria-label', event.detail ? 'Resume animations' : 'Pause animations'); });

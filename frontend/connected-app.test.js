@@ -12,6 +12,7 @@ import {metaMaskWallet} from './wallet.js';
 import {aboutContent,documentationContent,issuerContent,doodle} from './content.js';
 import {eventState, matchesEvent, profileStats, filterCollection, groupCollection} from './student-model.js';
 import {createPageLoader} from './page-loader.js';
+import {preserveEventDraft} from './event-draft.js';
 
 async function setup({hash = '', failure = false, events = [], ethereum, phantom, respond, Contract} = {}) {
   const {document, window} = parseHTML(readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8'));
@@ -26,7 +27,7 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    installPrivy(){}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    installPrivy(){}, preserveEventDraft, mountHomeArt(){}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, documentationContent, issuerContent, doodle, eventState, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -736,4 +737,96 @@ test('an expired shared recipient link shows artwork and a closed notice without
  assert(ui.document.querySelector('#live-app img'));
  assert.equal(ui.document.querySelector('#claim-mint'),null);
  assert.equal(ui.requests.some(([path])=>path==='/api/redeem/claim'),false);
+});
+
+test('mobile navigation closes on Escape and outside interaction and maintains its accessible state', async()=>{
+ const ui=await setup();const menu=ui.document.querySelector('.menu-button'),nav=ui.document.querySelector('#mobile-nav');
+ let restored=false;menu.focus=()=>{restored=true;};
+ menu.click(); assert.equal(nav.hidden,false); assert.equal(menu.getAttribute('aria-expanded'),'true');
+ const escape=new ui.context.window.Event('keydown');escape.key='Escape';ui.document.dispatchEvent(escape);
+ assert.equal(nav.hidden,true);assert.equal(menu.getAttribute('aria-label'),'Open navigation');assert(restored);
+ menu.click();ui.document.querySelector('#hero-title').click();assert.equal(nav.hidden,true);
+ menu.click();nav.querySelector('a').click();assert.equal(nav.hidden,true);
+});
+
+test('busy actions prevent duplicate submissions, expose progress and restore nested button content', async()=>{
+ const ui=await setup();
+ vm.runInContext(`
+  globalThis.testButton=document.createElement('button');testButton.innerHTML='<span>Keep this label</span><span aria-hidden="true">↗</span>';
+  globalThis.count=0;
+  globalThis.pendingAction=busy(testButton,()=>new Promise(resolve=>{globalThis.releaseAction=resolve;count++;}));
+ `,ui.context);
+ const button=ui.context.testButton;
+ assert.equal(button.disabled,true);assert.equal(button.getAttribute('aria-busy'),'true');
+ await vm.runInContext('busy(testButton,()=>{count++;})',ui.context);assert.equal(ui.context.count,1);
+ ui.context.releaseAction();await ui.context.pendingAction;
+ assert.equal(button.disabled,false);assert.equal(button.getAttribute('aria-busy'),null);
+ assert.equal(button.querySelectorAll('span').length,2);assert.match(button.textContent,/Keep this label/);
+});
+
+test('event text survives navigating away and invalid dates fail before artwork is uploaded', async()=>{
+ const ui=await setup({hash:'#create',respond:path=>path==='/api/auth/me'?{wallet:'0x1111111111111111111111111111111111111111'}:undefined});
+ const store=new Map();ui.context.window.sessionStorage={getItem:key=>store.get(key),setItem:(key,value)=>store.set(key,value),removeItem:key=>store.delete(key)};
+ vm.runInContext('createEventPage()',ui.context);
+ let form=ui.document.querySelector('#event-form');form.elements.title.value='Saved campus workshop';
+ form.querySelector('[name="drops-0"]').value='75';form.querySelector('[name="drops-0"]').oninput({target:form.querySelector('[name="drops-0"]')});
+ form.dispatchEvent(new ui.context.window.Event('input'));
+ ui.location.hash='#events';await ui.render();ui.location.hash='#create';await ui.render();
+ form=ui.document.querySelector('#event-form');assert.equal(form.elements.title.value,'Saved campus workshop');
+ assert.equal(form.querySelector('[name="drops-0"]').value,'75');
+ assert.match(form.querySelector('#draft-status').textContent,/Draft restored/);
+ form.reportValidity=()=>true;
+ form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ assert.match(form.querySelector('#publish-status').textContent,/end time after the start/);
+ assert.equal(ui.requests.some(([path])=>path==='/api/artwork'),false);
+ assert.equal(form.elements.title.value,'Saved campus workshop');
+});
+
+test('video collectibles reserve media space and keep video controls outside navigation links',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';
+ const ui=await setup({hash:'#gallery',respond:path=>path==='/api/auth/me'?{wallet}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[{id:7,tokenId:'42',title:'Workshop',role:'Attendee',animationUrl:'https://kairo.test/media/art/clip.mp4',image:'https://kairo.test/media/art/badge.png',ownershipVerified:true,contractAddress:wallet}]}:undefined});
+ const video=ui.document.querySelector('#collection-grid video');assert(video);
+ assert.equal(video.getAttribute('width'),'512');assert.equal(video.getAttribute('height'),'512');assert.equal(video.closest('a'),null);
+ assert(ui.document.querySelector('a.gallery-badge-info[href="#badge/42/'+wallet+'"]'));
+});
+
+test('dashboard refresh errors preserve entered recipients and provide a local retry',async()=>{
+ const address='0x1111111111111111111111111111111111111111';let failed=false;
+ const event={id:7,title:'Workshop',description:'Together',roles:['Attendee'],organizer:address,startsAt:1,endsAt:2,mintStartsAt:1,mintEndsAt:2,listed:true};
+ const ui=await setup({hash:'#issuer/manage/7',respond:(path)=>{
+  if(path==='/api/auth/me')return {wallet:address};
+  if(path.startsWith('/api/organizer/events'))return {events:[event],publications:[],hasMore:false};
+  if(path==='/api/events/7/dashboard'){if(failed)throw Error('Temporary outage');return {event,capRemaining:10};}
+  if(path.startsWith('/api/events/7/transactions')||path.startsWith('/api/events/7/links'))return {rows:[],hasMore:false};
+ }});
+ const content=ui.document.querySelector('#staff-content'),recipients=content.querySelector('[name="recipients"]');
+ recipients.value='guest@example.org,Attendee';failed=true;
+ await content.querySelector('#refresh-dashboard').onclick();
+ assert.equal(content.querySelector('[name="recipients"]'),recipients);assert.equal(recipients.value,'guest@example.org,Attendee');
+ assert.match(content.querySelector('#dashboard-error').textContent,/Dashboard refresh failed/);assert(content.querySelector('#retry-dashboard'));
+ failed=false;await content.querySelector('#retry-dashboard').onclick();assert.equal(content.querySelector('#dashboard-error'),null);
+});
+
+test('an in-flight background dashboard refresh cannot overwrite newly entered form text',async()=>{
+ const address='0x1111111111111111111111111111111111111111';let release,delay=false;
+ const event={id:7,title:'Workshop',roles:['Attendee'],organizer:address,startsAt:1,endsAt:2,mintStartsAt:1,mintEndsAt:2,listed:true};
+ const ui=await setup({hash:'#issuer/manage/7',respond:path=>{
+  if(path==='/api/auth/me')return {wallet:address};
+  if(path.startsWith('/api/organizer/events'))return {events:[event],publications:[],hasMore:false};
+  if(path==='/api/events/7/dashboard')return delay?new Promise(resolve=>{release=resolve;}):{event,capRemaining:10};
+  if(path.startsWith('/api/events/7/transactions')||path.startsWith('/api/events/7/links'))return {rows:[],hasMore:false};
+ }});
+ const content=ui.document.querySelector('#staff-content'),field=content.querySelector('[name="recipients"]');delay=true;
+ const refresh=ui.document.querySelector('#staff-event').onchange({background:true});
+ await new Promise(resolve=>setImmediate(resolve));
+ field.value='New unsaved recipients';content.oninput();release({event,capRemaining:10});await refresh;
+ assert.equal(content.querySelector('[name="recipients"]'),field);assert.equal(field.value,'New unsaved recipients');
+});
+
+test('navigation identifies the current section across gallery aliases and documentation chapters',async()=>{
+ for(const [hash,destination] of [['#collector/collection','#gallery'],['#doc-api','#builders/documentation'],['#create','#organize']]){
+  const ui=await setup({hash});
+  for(const selector of ['.desktop-nav','#mobile-nav'])assert.equal(ui.document.querySelector(`${selector} a[aria-current="page"]`).getAttribute('href'),destination);
+  assert.match(ui.document.title,/Kairo/);
+ }
 });

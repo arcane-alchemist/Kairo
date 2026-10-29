@@ -26,14 +26,14 @@ test('slow-load recovery reloads the current URL instead of navigating home', ()
   assert.equal(window.location.href, 'https://kairo.test/#gallery');
 });
 
-test('loader waits for the document, fonts, scene textures and decoded lazy images', async () => {
+test('loader waits for required document resources and decoded eager images', async () => {
   const {document, window} = setup();
   Object.defineProperty(document, 'readyState', {value: 'loading'});
   let fontsReady, sceneReady, imageDecoded;
   document.fonts = {ready: new Promise(resolve => {fontsReady = resolve;})};
   const loader = createPageLoader(document, window);
   const image = document.createElement('img');
-  image.src = '/badge.svg'; image.loading = 'lazy';
+  image.src = '/badge.svg'; image.loading = 'eager';
   Object.defineProperties(image, {complete: {value: false}, naturalWidth: {value: 320}});
   image.decode = () => new Promise(resolve => {imageDecoded = resolve;});
   document.querySelector('#main').append(image);
@@ -88,4 +88,18 @@ test('video collectibles wait for a playable first frame and handle errors', asy
     video.dispatchEvent(new window.Event(event)); await finished;
     assert.equal(document.querySelector('#page-loader').hidden, true);
   }
+});
+
+
+test('offscreen lazy images and metadata-only video never hold the page loader open', async () => {
+  const {document, loader} = setup();
+  const image = document.createElement('img'); image.src = '/slow-badge.svg'; image.loading = 'lazy';
+  Object.defineProperty(image, 'complete', {value:false});
+  const video = document.createElement('video'); video.setAttribute('src','/slow-video.mp4'); video.setAttribute('preload','metadata');
+  video.load = () => { throw Error('Must not force video download'); };
+  document.querySelector('#main').append(image, video);
+  await loader.finish(loader.begin());
+  assert.equal(document.querySelector('#page-loader').hidden, true);
+  assert.equal(image.loading, 'lazy');
+  assert.equal(video.getAttribute('preload'), 'metadata');
 });
