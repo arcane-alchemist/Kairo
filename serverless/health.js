@@ -2,8 +2,10 @@ import {getAddress, Wallet, ZeroAddress} from 'ethers';
 import {ServiceError, errorResponse} from './errors.js';
 import {mediaBaseURL} from './media.js';
 
-export function checkConfig(env, {writes = false} = {}) {
-  const missing = ['CHAIN_ID','CHAIN_NAME','CONTRACT_ADDRESS','PUBLIC_RPC_URL','EXPLORER_URL','SITE_ORIGIN','SUPER_ADMIN_ADDRESS'].filter(key => !env[key]);
+export function checkConfig(env, {writes = false, publicOnly = false} = {}) {
+  const required = ['CHAIN_ID','CHAIN_NAME','CONTRACT_ADDRESS','PUBLIC_RPC_URL','EXPLORER_URL','SITE_ORIGIN'];
+  if (!publicOnly) required.push('SUPER_ADMIN_ADDRESS');
+  const missing = required.filter(key => !env[key]);
   if (missing.length) throw new ServiceError('NOT_CONFIGURED', `Kairo configuration is missing: ${missing.join(', ')}.`);
   try {
     for (const [key,fallback] of [['EVENTS_PER_WALLET_PER_DAY',5],['EMAIL_RETENTION_DAYS',30]]) {
@@ -11,7 +13,7 @@ export function checkConfig(env, {writes = false} = {}) {
     }
     const archives=JSON.parse(env.ARCHIVE_CONTRACT_ADDRESSES || '[]');
     if (!Array.isArray(archives) || archives.some(value=>getAddress(value) === ZeroAddress)) throw Error();
-    if (getAddress(env.SUPER_ADMIN_ADDRESS) === ZeroAddress) throw Error();
+    if (!publicOnly && getAddress(env.SUPER_ADMIN_ADDRESS) === ZeroAddress) throw Error();
     if (Number(env.CHAIN_ID) !== 11155111 || getAddress(env.CONTRACT_ADDRESS) === ZeroAddress) throw Error();
     for (const key of ['PUBLIC_RPC_URL','EXPLORER_URL','SITE_ORIGIN']) {
       const url = new URL(env[key]);
@@ -19,7 +21,6 @@ export function checkConfig(env, {writes = false} = {}) {
     }
   } catch { throw new ServiceError('NOT_CONFIGURED', 'Kairo network configuration is invalid.'); }
   if (writes) {
-    if (!env.QR_HMAC_SECRET || env.QR_HMAC_SECRET.length < 32) throw new ServiceError('NOT_CONFIGURED','Kairo QR signing secret is not configured.');
     let signer;try {signer=new Wallet(env.ISSUER_PRIVATE_KEY);}catch{throw new ServiceError('RELAYER_NOT_CONFIGURED','Set the relayer private key locally to enable gas sponsorship.','relayer');}
     if(signer.address!==getAddress(env.ISSUER_ADDRESS))throw new ServiceError('RELAYER_MISMATCH','The relayer key belongs to a different wallet. Use the key matching the configured gas-paying wallet.','relayer');
   }

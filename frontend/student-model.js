@@ -3,6 +3,9 @@ export function eventState(event, now = Date.now() / 1000) {
   if (event.startsAt <= now) return 'Happening now';
   return 'Upcoming';
 }
+export function isPublicPastEvent(event, now = Date.now()/1000) {
+  return event.listed!==false && event.approval!=='pending' && event.approval!=='rejected' && eventState(event,now)==='Past event';
+}
 export function matchesEvent(event, { search = '', category = 'All events', date = '', role = '', period = 'active' } = {}, now = Date.now() / 1000) {
   return (period === 'all' || event.endsAt >= now) && (category === 'All events' || event.category === category)
     && (!role || (event.roles || ['Attendee']).includes(role))

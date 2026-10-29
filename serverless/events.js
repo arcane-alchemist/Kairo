@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {formatEther,Wallet,getAddress,ZeroAddress} from 'ethers';
 import {mediaBaseURL,verifyPublicMetadata} from './media.js';
 import {qrToken,validQR,randomToken,csv,parseRecipients} from './claims.js';
+import {checkConfig} from './health.js';
 const now=()=>Math.floor(Date.now()/1000);
 const json=(value,status=200)=>Response.json(value,{status});
 const idSchema=z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -14,7 +15,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  async function owner(id,wallet) {
   const event=await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
   if(!event)throw new HttpError(404,'Event not found');
-  if(!await admin(wallet)&&event.organizer.toLowerCase()!==wallet.toLowerCase())throw new HttpError(403,'This event belongs to another organizer');
+  if(event.organizer.toLowerCase()!==wallet.toLowerCase()&&!await admin(wallet))throw new HttpError(403,'This event belongs to another organizer');
   return event;
  }
  async function eligibility(event,chain) {
@@ -50,13 +51,14 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   }
   if(input.eventStartsAt>=input.eventEndsAt||input.mintStartsAt>=input.mintEndsAt||input.mintEndsAt<=now())throw new HttpError(400,'Check event dates and minting window');
   if(new Set(input.roleArtwork.map(art=>art.role.toLowerCase())).size!==input.roleArtwork.length)throw new HttpError(400,'Each role must be unique');
-  for(const art of input.roleArtwork) {
+  checkConfig(env,{writes:true});
+  await Promise.all(input.roleArtwork.map(async art=>{
    const key=art.uri.startsWith(`${artworkBase}metadata/`)?art.uri.slice(artworkBase.length):'';
    if(!/^metadata\/[a-f0-9]{64}\.json$/.test(key))throw new HttpError(400,'Upload or generate each badge first');
    const object=await env.MEDIA.get(key),metadata=object&&await object.json();
    if(!metadata||metadata.name!==input.title||metadata.description!==input.description||metadata.image!==art.image||metadata.animation_url!==art.animationUrl||!metadata.attributes?.some(t=>t.trait_type==='Role'&&t.value===art.role))throw new HttpError(409,'Badge differs from its frozen metadata');
    if(new URL(artworkBase).origin!==url.origin)await verifyPublicMetadata(art.uri,metadata,body);
-  }
+  }));
   const chain=await chainFactory(env);await chain.assertReady();
   // The conditional insert makes the daily limit atomic across requests.
   const result=await env.DB.prepare(`INSERT INTO chain_actions(id,wallet,kind,payload,created_at)
@@ -74,7 +76,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  const publication=path.match(/^\/api\/publications\/([a-f0-9-]{36})$/);
  if(publication&&request.method==='GET') {
   const wallet=await user(request,env),row=await env.DB.prepare('SELECT * FROM chain_actions WHERE id=?').bind(publication[1]).first();
-  if(!row||(!await admin(wallet)&&row.wallet.toLowerCase()!==wallet.toLowerCase()))throw new HttpError(404,'Publication not found');
+  if(!row||(row.wallet.toLowerCase()!==wallet.toLowerCase()&&!await admin(wallet)))throw new HttpError(404,'Publication not found');
   const events=await env.DB.prepare('SELECT id,roles FROM events WHERE group_id=? ORDER BY id').bind(row.id).all();
   return json({id:row.id,status:row.status,txHash:row.tx_hash,error:row.error,events:events.results});
  }
@@ -140,6 +142,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
  }
  const qr=path.match(/^\/api\/events\/(\d+)\/qr$/);
  if(qr&&request.method==='GET') {
+  if(!env.QR_HMAC_SECRET)throw new HttpError(410,'Use the public mint link shared by the organizer.');
   const id=idSchema.parse(qr[1]),wallet=await user(request,env),event=await owner(id,wallet);
   if(JSON.parse(event.roles)[0].toLowerCase()!=='attendee')throw new HttpError(409,'Walk-in QR is for the Attendee role');
   await eligibility(event,await chainFactory(env));
@@ -264,7 +267,7 @@ export async function domainRoutes(request,env,chainFactory,helpers) {
   }
   const id=link?.event_id||idSchema.parse((direct||decision||claim)[1]),event=await env.DB.prepare('SELECT * FROM events WHERE id=?').bind(id).first();
   const chain=await chainFactory(env),onchain=await eligibility(event,chain);
-  if(!actor&&!link&&!input.publicLink&&(JSON.parse(event.roles)[0].toLowerCase()!=='attendee'||!await validQR(env.QR_HMAC_SECRET,id,input.qr)))throw new HttpError(403,'Walk-in QR expired or invalid. Scan the live screen again');
+  if(!actor&&!link&&!input.publicLink&&(!env.QR_HMAC_SECRET||JSON.parse(event.roles)[0].toLowerCase()!=='attendee'||!await validQR(env.QR_HMAC_SECRET,id,input.qr)))throw new HttpError(403,'Walk-in QR expired or invalid. Scan the live screen again');
   if(await chain.token(id,wallet)!=='0')throw new HttpError(409,'This wallet already minted this role');
   const previous=await env.DB.prepare('SELECT id FROM claims WHERE event_id=? AND wallet=? COLLATE NOCASE').bind(id,wallet).first();
   const ticket=previous?.id||crypto.randomUUID(),attempt=crypto.randomUUID(),timestamp=now();

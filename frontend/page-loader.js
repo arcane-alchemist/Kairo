@@ -30,7 +30,7 @@ export function createPageLoader(document, window) {
   async function finish(ticket, dependencies = []) {
     await Promise.allSettled([loaded, document.fonts?.ready, ...dependencies]);
     if (ticket !== current) return;
-    const assets = [...document.querySelectorAll('img, video')].filter(node => !node.closest('[hidden]') && (node.currentSrc || node.getAttribute('src') || node.querySelector('source[src]')));
+    const assets = [...document.querySelectorAll('img, video')].filter(node => !node.closest('[hidden]') && node.loading !== 'lazy' && !['metadata', 'none'].includes(node.getAttribute('preload')) && (node.currentSrc || node.getAttribute('src') || node.querySelector('source[src]')));
     await Promise.allSettled(assets.map(async node => {
       if (node.tagName === 'IMG') {
         node.loading = 'eager';

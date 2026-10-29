@@ -17,10 +17,20 @@ export function metadataKey(uri,env,requestUrl) {
 }
 export async function verifyPublicMetadata(uri,expected,readJSON) {
  let response;
- try {response=await fetch(uri,{redirect:'manual',signal:AbortSignal.timeout(8000)});}
- catch {throw new ServiceError('MEDIA_UNREACHABLE','Your artwork upload is saved, but its public URL is unavailable. Retry publishing in a moment.','media');}
- if(!response.ok)throw new ServiceError('MEDIA_UNREACHABLE','Your artwork is not publicly readable yet. Retry publishing in a moment.','media');
- const actual=await readJSON(response);
+ const host=new URL(uri).host;
+ for(let attempt=0;attempt<2;attempt++) {
+  try {response=await fetch(uri,{redirect:'manual',signal:AbortSignal.timeout(8000)});}
+  catch {
+   if(attempt===0)continue;
+   throw new ServiceError('MEDIA_UNREACHABLE',`Artwork is saved, but ${host} could not be reached. Check that MEDIA_BASE_URL points to the public address of the connected artwork bucket.`,'media');
+  }
+  if(response.ok)break;
+  if(attempt===0&&[408,429,500,502,503,504].includes(response.status)){await response.body?.cancel();continue;}
+  throw new ServiceError('MEDIA_UNREACHABLE',`The artwork host ${host} returned HTTP ${response.status}. Check MEDIA_BASE_URL and public access for the connected artwork bucket.`,'media');
+ }
+ let actual;
+ try {actual=await readJSON(response);}
+ catch {throw new ServiceError('MEDIA_MISMATCH',`The artwork host ${host} did not return readable metadata. Check that MEDIA_BASE_URL serves this bucket's metadata files.`,'media');}
  if(JSON.stringify(actual)!==JSON.stringify(expected))throw new ServiceError('MEDIA_MISMATCH','The public artwork does not match your saved badge. Upload the design again.','media');
 }
 

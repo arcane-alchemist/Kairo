@@ -34,3 +34,33 @@ test('legacy artwork uses the current public host without changing third-party o
  assert.equal(displayMediaURL(old,env,'http://localhost:8787'),`https://art.r2.dev/${key}`);
  for(const value of [old.replace('old.test','other.test'),old+'?x=1','ipfs://image','https://old.test/media/not-a-hash.png'])assert.equal(displayMediaURL(value,env,'http://localhost:8787'),value);
 });
+
+test('a temporary network failure or public-host outage recovers without changing the frozen URL',async t=>{
+ const expected={name:'Campus workshop',image:'https://art.test/art/badge.png'},uri='https://art.test/metadata/badge.json';
+ const mock=t.mock.method(globalThis,'fetch',async()=>Response.json(expected));
+ for(const failure of ['network',429,503]){
+  let attempts=0;
+  mock.mock.mockImplementation(async requested=>{
+   assert.equal(requested,uri);
+   if(++attempts===1){if(failure==='network')throw TypeError('fetch failed');return new Response(null,{status:failure});}
+   return Response.json(expected);
+  });
+  await verifyPublicMetadata(uri,expected,response=>response.json());assert.equal(attempts,2);
+ }
+});
+
+test('permanent public-host failures identify the host and never publish through a fallback URL',async t=>{
+ let attempts=0;
+ t.mock.method(globalThis,'fetch',async()=>{attempts++;throw TypeError('fetch failed');});
+ await assert.rejects(verifyPublicMetadata('https://missing-art.test/metadata/badge.json',{},response=>response.json()),error=>error.code==='MEDIA_UNREACHABLE'&&error.message.includes('missing-art.test')&&error.message.includes('MEDIA_BASE_URL'));
+ assert.equal(attempts,2);
+});
+
+test('wrong public routes and non-JSON responses fail with actionable media errors',async t=>{
+ const mock=t.mock.method(globalThis,'fetch',async()=>new Response('Not found',{status:404}));let attempts=0;
+ mock.mock.mockImplementation(async()=>{attempts++;return new Response('Not found',{status:404});});
+ await assert.rejects(verifyPublicMetadata('https://art.test/metadata/badge.json',{},response=>response.json()),error=>error.code==='MEDIA_UNREACHABLE'&&error.message.includes('HTTP 404'));
+ assert.equal(attempts,1);
+ mock.mock.mockImplementation(async()=>new Response('<html>Sign in</html>'));
+ await assert.rejects(verifyPublicMetadata('https://art.test/metadata/badge.json',{},response=>response.json()),{code:'MEDIA_MISMATCH'});
+});

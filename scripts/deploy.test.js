@@ -13,3 +13,11 @@ test('terminal deployment explicitly uses the saved matching relayer, rejects ad
  assert.throws(()=>deploymentWallet(config,[],{...values,DEPLOYER_PRIVATE_KEY:admin.privateKey}),/never the super admin key/);
  assert.throws(()=>deploymentWallet(config,['--local'],values),/Sepolia only/);
 });
+
+test('deployment uses the public admin setting without requiring an admin secret and still rejects its private key',()=>{
+ const admin=Wallet.createRandom(),deployer=Wallet.createRandom(),relayer=Wallet.createRandom();
+ const config={vars:{SUPER_ADMIN_ADDRESS:admin.address,ISSUER_ADDRESS:relayer.address}};
+ assert.equal(deploymentWallet(config,[],{DEPLOYER_PRIVATE_KEY:deployer.privateKey}).address,deployer.address);
+ assert.throws(()=>deploymentWallet(config,[],{DEPLOYER_PRIVATE_KEY:admin.privateKey}),/never the super admin key/);
+ assert.throws(()=>deploymentWallet(config,[],{DEPLOYER_PRIVATE_KEY:deployer.privateKey,SUPER_ADMIN_ADDRESS:deployer.address}),/Admin environment differs/);
+});

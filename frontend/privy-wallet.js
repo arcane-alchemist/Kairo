@@ -13,29 +13,39 @@ export const privyConfig = {
 export function mountPrivy(document) {
  return new Promise(resolve => {
   let pending, controls;
-  const finish = async ({wallet}) => {
-   const request=pending;pending=null;
-   if(!request)return;
+  const finish = async (kind, {wallet}) => {
+   const request=pending;
+   if(!request||request.kind!==kind)return;
+   pending=null;
    try {request.resolve({address:wallet.address,provider:await wallet.getEthereumProvider(),name:wallet.walletClientType});}
    catch(error){request.reject(error);}
   };
-  const failed = error => {const request=pending;pending=null;request?.reject(new Error(typeof error==='string'?error:'Wallet connection cancelled or failed. Try again.'));};
+  const failed = (kind, error) => {
+   const request=pending;
+   if(!request||request.kind!==kind)return;
+   pending=null;
+   const code=typeof error==='string'?error:error?.code;
+   request.reject(code==='exited_auth_flow'
+    ? Object.assign(new Error('Wallet connection cancelled. Choose Connect wallet to try again.'),{code:4001})
+    : new Error('Wallet connection could not be completed. Please try again.'));
+  };
   function Bridge() {
    const {ready,logout}=usePrivy();
    const {wallets,ready:walletsReady}=useWallets();
-   const {connectWallet}=useConnectWallet({onSuccess:finish,onError:failed});
-   const {connectOrCreateWallet}=useConnectOrCreateWallet({onSuccess:finish,onError:failed});
+   const {connectWallet}=useConnectWallet({onSuccess:result=>finish('wallet',result),onError:error=>failed('wallet',error)});
+   const {connectOrCreateWallet}=useConnectOrCreateWallet({onSuccess:result=>finish('auth',result),onError:error=>failed('auth',error)});
    useEffect(()=>{
     if(!ready||!walletsReady)return;
     controls={wallets,logout,connectWallet,connectOrCreateWallet};
     resolve({
-     connect: (walletList) => new Promise((resolve,reject)=>{
+     connect: (walletList, {switchAccount=false}={}) => new Promise((resolve,reject)=>{
       if(pending){reject(new Error('A wallet connection is already open.'));return;}
-      pending={resolve,reject};
-      try {if(walletList)controls.connectWallet({walletList});else controls.connectOrCreateWallet();}catch(error){failed(error);}
+      const kind=walletList||switchAccount?'wallet':'auth';
+      pending={resolve,reject,kind};
+      try {if(kind==='wallet')controls.connectWallet(walletList?{walletList}:undefined);else controls.connectOrCreateWallet();}catch(error){failed(kind,error);}
      }),
      restore: async address => {const wallet=controls.wallets.find(wallet=>wallet.address.toLowerCase()===address?.toLowerCase());return wallet?{address:wallet.address,provider:await wallet.getEthereumProvider(),name:wallet.walletClientType}:null;},
-     disconnect: async()=>{failed('Wallet disconnected.');await controls.logout();}
+     disconnect: async()=>{if(pending)failed(pending.kind,'exited_auth_flow');await controls.logout();}
     });
    },[ready,walletsReady,wallets,logout,connectWallet,connectOrCreateWallet]);
    return null;
