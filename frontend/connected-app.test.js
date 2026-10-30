@@ -684,6 +684,7 @@ test('My Gallery adds the existing NFT to MetaMask with its original contract an
  const ui=await setup({hash:'#gallery',ethereum:{isMetaMask:true,request:async input=>{
   methods.push(input.method);if(input.method==='eth_accounts')return [wallet];if(input.method==='eth_chainId')return chain;
   if(input.method==='wallet_switchEthereumChain'){chain='0xaa36a7';return null;}
+  if(input.method==='web3_clientVersion')return 'MetaMask/v13.53.0';
   if(input.method==='wallet_watchAsset'){watch=input;return true;}return [];
  }},respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[item]}:undefined});
  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(methods,[]);
@@ -702,6 +703,7 @@ test('MetaMask import validates the receiving account and handles unsupported wa
   const ui=await setup({hash:'#gallery',ethereum:{isMetaMask:true,request:async({method})=>{
    if(method==='eth_chainId')return '0xaa36a7';
    if(method==='eth_accounts'){reads++;return scenario==='wrong-account'?[other]:scenario==='multiple-accounts'?[wallet,other]:scenario==='changed-account'&&reads>1?[other]:[wallet];}
+   if(method==='web3_clientVersion')return 'MetaMask/v13.53.0';
    if(method==='wallet_watchAsset'){watches++;if(scenario==='unsupported')throw Object.assign(Error('Unsupported'),{code:4200});return false;}
    return [];
   }},respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[{id:7,tokenId:'18',contractAddress:'0x90a2920272dd3852193A79DA621B1Ccc9D093714',title:'POAP',role:'Attendee',history:[],ownershipVerified:true}]}:undefined});
@@ -948,6 +950,7 @@ test('a participant connects through Privy, mints from the shared link and impor
  const metamask={isMetaMask:true,request:async input=>{
   if(input.method==='eth_accounts')return [wallet];if(input.method==='eth_chainId')return chain;
   if(input.method==='wallet_switchEthereumChain'){chain='0xaa36a7';return null;}
+  if(input.method==='web3_clientVersion')return 'MetaMask/v13.53.0';
   if(input.method==='wallet_watchAsset'){watch=input;return true;}throw Error('Unexpected MetaMask request: '+input.method);
  }};
  const event={id:7,title:'Approved workshop',description:'A day together',roles:['Attendee'],listed:true,approval:'approved',startsAt:now-10,endsAt:now+3600,mintStartsAt:now-10,mintEndsAt:now+3600};

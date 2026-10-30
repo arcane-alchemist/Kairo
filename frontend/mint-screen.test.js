@@ -9,7 +9,7 @@ test('QR claims show only pending status until confirmation, then the minted art
   for (const status of ['queued', 'confirmed']) {
     const statusNode = {}, importButton = {};
     const main = { innerHTML: '', querySelector: selector => selector === '#mint-status' && main.innerHTML.includes('id="mint-status"') ? statusNode : selector === '#mint-add-metamask' ? importButton : null };
-    const context = vm.createContext({ensureConfig:async()=>{},config:{chainName:'Sepolia'}, main, modalBody: {}, modal: { open: false }, close() {}, clearInterval() {}, setInterval() {}, ticketTimer: null, ticketView: 0,
+    const context = vm.createContext({ensureConfig:async()=>{},config:{chainName:'Sepolia'}, main, modalBody: {}, modal: { open: false }, close() {}, preloadMintArtwork:async()=>{}, loadingMarkup:()=>'<div class="inline-loading">Creating your POAP…</div>', clearInterval() {}, setInterval() {}, ticketTimer: null, ticketView: 0,
       date:String,time:String,esc: String, artwork: () => '<img src="hacktober.png">', location: { origin: 'https://kairo.test' }, window: {}, config: { contractAddress: 'contract' }, txLink: () => 'https://sepolia.test/tx',
       api: async () => ({ status, claimed_at: 1, wallet: 'wallet', token_id: '2' }),
     });
@@ -18,6 +18,7 @@ test('QR claims show only pending status until confirmation, then the minted art
     assert.equal(main.innerHTML.includes('A day of building together.'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('hacktober.png'), status === 'confirmed');
     assert.equal(main.innerHTML.includes('Add to MetaMask'), status === 'confirmed');
+    if(status==='queued') { assert.match(main.innerHTML,/inline-loading/); assert.doesNotMatch(main.innerHTML,/Awaiting blockchain confirmation|Queued for sponsored minting/); }
     assert.equal(main.innerHTML.includes('ticket-qr'), false);
     assert.equal(main.innerHTML.includes('claim-mint'), false);
   }
@@ -70,7 +71,7 @@ test('wallet connects and switches to Sepolia before requesting the sign-in sign
 test('a late mint response cannot replace a newer ticket screen', async () => {
   let resolveFirst,requests=0;const node={};
   const main={innerHTML:'',querySelector:selector=>selector==='#mint-status'&&main.innerHTML.includes('id="mint-status"')?node:null};
-  const context=vm.createContext({ensureConfig:async()=>{},main,modalBody:{},modal:{open:false},close(){},clearInterval(){},setInterval(){},ticketTimer:null,ticketView:0,esc:String,window:{},artwork:()=>'<img>',
+  const context=vm.createContext({ensureConfig:async()=>{},main,modalBody:{},modal:{open:false},close(){},preloadMintArtwork:async()=>{},loadingMarkup:()=>'<div class="inline-loading">Creating your POAP…</div>',clearInterval(){},setInterval(){},ticketTimer:null,ticketView:0,esc:String,window:{},artwork:()=>'<img>',
     api:async()=>++requests===1?new Promise(resolve=>{resolveFirst=resolve;}):{status:'pending',claimed_at:1}});
   vm.runInContext(showTicket,context);
   const first=vm.runInContext("showTicket('first',{claimMode:'qr',title:'First'})",context);
