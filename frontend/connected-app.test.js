@@ -14,6 +14,7 @@ import {eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollect
 import {createPageLoader} from './page-loader.js';
 import {preserveEventDraft} from './event-draft.js';
 import {submitPublication,uncertainPublication} from './publication.js';
+import {circularArtwork} from './circular-artwork.js';
 
 async function setup({hash = '', failure = false, events = [], ethereum, phantom, privy, respond, Contract} = {}) {
   const {document, window} = parseHTML(readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8'));
@@ -29,7 +30,7 @@ async function setup({hash = '', failure = false, events = [], ethereum, phantom
   window.phantom = phantom ? {ethereum:phantom} : undefined;
   const requests = [], intervals = [], storage = new Map();
   const context = vm.createContext({document, window, location, navigator: {onLine: true}, URL, crypto, csv, console, history: {replaceState(){}},
-    installPrivy(){}, preserveEventDraft, submitPublication, uncertainPublication, homeArtCalls:0, mountHomeArt(){context.homeArtCalls++;}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, issuerContent, doodle, eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
+    installPrivy(){}, circularArtwork, preserveEventDraft, submitPublication, uncertainPublication, homeArtCalls:0, mountHomeArt(){context.homeArtCalls++;}, QRCode:{toCanvas:async()=>{}}, createPageLoader, createApiClient:options=>realApiClient({...options,wait:async()=>{},retryDelays:[0,0]}), mountNative, downloadQR, getAddress, ZeroAddress, hexlify, toUtf8Bytes, Contract, ABI, BrowserProvider:class {constructor(provider){this.provider=provider;}async getSigner(account){return {getAddress:async()=>account,signMessage:async()=> 'test-signature'};}}, metaMaskWallet, aboutContent, issuerContent, doodle, eventState, isPublicPastEvent, matchesEvent, profileStats, filterCollection, groupCollection, claimEntry: () => null,
     setTimeout: () => 1, clearTimeout(){}, setInterval: fn => {intervals.push(fn);return intervals.length;}, clearInterval(){}, matchMedia: () => ({matches:true}),
     localStorage: {getItem: key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)}, badgeSvg: () => '<svg/>', mountCoin(){}, mountPress(){},
     fetch: async (path, options) => { requests.push([path, options]); if (failure) throw Error('API offline'); if (respond) { const result = await respond(path,options); if (result !== undefined) return result instanceof Response ? result : Response.json(result); } return Response.json(path.startsWith('/api/my/requests') ? {rows:[],hasMore:false} : path === '/api/events' ? events : (path.startsWith('/api/organizer/events')||path.startsWith('/api/admin/events')) ? {events:[],publications:[]} : path === '/api/config' ? {contractAddress:'0xcontract',chainId:11155111,chainName:'Sepolia',explorerUrl:'https://sepolia.etherscan.io',categories:['Technology','Workshop']} : {}); }
@@ -637,7 +638,7 @@ test('each participant sees their own token ID and can copy the actual NFT contr
   }});
   await new Promise(resolve=>setImmediate(resolve));assert.match(ui.document.querySelector('.gallery-badge-info').textContent,new RegExp('Token #'+tokenId));
   vm.runInContext('badgeDetails(collectionItems[0])',ui.context);
-  const details=ui.document.querySelector('#modal-body');assert.match(details.textContent,/NFT contract address/);assert(details.textContent.includes(contractAddress));assert(details.textContent.includes('Token ID: '+tokenId));assert.equal(details.querySelector('a[href="https://dead.example/metadata.json"]'),null);assert.equal(details.textContent.includes('View metadata'),false);
+  const details=ui.document.querySelector('#live-app .badge-details');assert(details);assert.equal(ui.document.querySelector('#modal').open,false);assert.match(details.textContent,/NFT contract address/);assert.doesNotMatch(details.textContent,/Issuance transaction history|Transaction history has not been indexed/);assert(details.textContent.includes(contractAddress));assert(details.textContent.includes('Token ID: '+tokenId));assert.equal(details.querySelector('a[href="https://dead.example/metadata.json"]'),null);assert.equal(details.textContent.includes('View metadata'),false);
   let copied;ui.context.navigator.clipboard={writeText:async value=>{copied=value;}};
   const contractButton=details.querySelector('#copy-nft-contract');await contractButton.onclick({target:contractButton});assert.equal(copied,contractAddress);
   const tokenButton=details.querySelector('#copy-nft-token');await tokenButton.onclick({target:tokenButton});assert.equal(copied,tokenId);
@@ -965,4 +966,46 @@ test('a participant connects through Privy, mints from the shared link and impor
  await ui.document.querySelector('#mint-add-metamask').onclick();
  assert.equal(chain,'0xaa36a7');assert.equal(watch.params.type,'ERC721');assert.equal(watch.params.options.address,contract);assert.equal(watch.params.options.tokenId,'17');
  assert.equal(privyConnections,1);assert.equal(mints,1);assert.equal(vm.runInContext('walletClient.provider',ui.context),rainbow);
+});
+
+test('publishing a custom JPEG uploads a circular PNG and uses its metadata for the minted role',async()=>{
+ const ui=await setup({respond:(path,options)=>{
+  if(path==='/api/artwork')return {image:'https://kairo.test/media/art/circular.png',uri:'https://kairo.test/media/metadata/circular.json'};
+  if(path==='/api/organizer/events'&&options.method==='POST')return {id:JSON.parse(options.body).id,status:'pending'};
+  if(path.startsWith('/api/publications/'))return {status:'live',events:[{id:7}]};
+ }});
+ vm.runInContext("session={wallet:'0x1111111111111111111111111111111111111111',admin:false}; createEventPage(); FileReader=class {readAsDataURL(file){this.result=file.data;this.onload();}}",ui.context);
+ const form=ui.document.querySelector('#event-form');form.reportValidity=()=>true;
+ for(const [key,value]of Object.entries({title:'Campus workshop',description:'A coding workshop for our campus',club:'Code club',category:'Workshop',campus:'Main campus',roles:'Attendee',venue:'Hall A',starts:'2026-12-01T10:00',eventEnds:'2026-12-01T12:00',mintStarts:'2026-12-01T10:00',ends:'2026-12-02T12:00'}))Object.defineProperty(form.elements[key],'value',{configurable:true,writable:true,value});
+ const originalCreate=ui.document.createElement.bind(ui.document);
+ let clipped=false,drawn=false;
+ ui.document.createElement=tag=>{
+  if(tag==='img')return {naturalWidth:1200,naturalHeight:600,decode:async()=>{}};
+  if(tag==='canvas')return {getContext:()=>({beginPath(){},arc(){},clip(){clipped=true;},drawImage(){assert(clipped);drawn=true;}}),toDataURL:()=>{assert(drawn);return 'data:image/png;base64,circular';}};
+  return originalCreate(tag);
+ };
+ const input=form.querySelector('input[type="file"]');
+ Object.defineProperty(input,'files',{value:[{type:'image/jpeg',size:20,data:'data:image/jpeg;base64,original'}]});input.onchange({target:input});
+ form.onsubmit({preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));
+ const artwork=ui.requests.find(([path])=>path==='/api/artwork');assert(artwork);
+ assert.equal(JSON.parse(artwork[1].body).image,'data:image/png;base64,circular');
+ const publication=ui.requests.find(([path,options])=>path==='/api/organizer/events'&&options.method==='POST');assert(publication);
+ const role=JSON.parse(publication[1].body).roleArtwork[0];
+ assert.equal(role.image,'https://kairo.test/media/art/circular.png');
+ assert.equal(role.uri,'https://kairo.test/media/metadata/circular.json');
+});
+
+test('a minted POAP detail URL opens a full page and returns to Gallery without a popup',async()=>{
+ const wallet='0x1111111111111111111111111111111111111111';
+ const item={id:7,tokenId:'42',contractAddress:'0x90a2920272dd3852193A79DA621B1Ccc9D093714',title:'Campus memory',description:'A day together.',role:'Attendee',image:'https://kairo.test/media/art/badge.png',ownershipVerified:true,history:[{hash:'0xhistory',created_at:1}]};
+ const ui=await setup({hash:'#badge/42/'+wallet,respond:path=>path==='/api/auth/me'?{wallet,admin:false}:path.startsWith('/api/wallet-collection')?{total:1,pending:0,nextCursor:null,items:[item]}:undefined});
+ await new Promise(resolve=>setImmediate(resolve));
+ const main=ui.document.querySelector('#live-app');
+ assert.equal(main.hidden,false);assert.equal(main.querySelector('h1').textContent,'Campus memory');
+ assert(main.querySelector('.badge-details img'));assert(main.querySelector('#add-nft-metamask'));
+ assert.equal(ui.document.querySelector('#modal').open,false);
+ assert.doesNotMatch(main.textContent,/Issuance transaction history|Transaction history has not been indexed/);
+ assert.equal(main.querySelector('.back-link').getAttribute('href'),'#gallery');
+ ui.location.hash='#gallery';await ui.render();
+ assert(main.querySelector('.gallery-badge-info'));assert.equal(main.querySelector('.badge-details'),null);
 });

@@ -30,6 +30,7 @@ self.addEventListener('fetch', event => {
         const copy = response.clone();
         event.waitUntil((async () => {
           await cache.put(request, copy);
+          if (!url.pathname.startsWith('/media/')) return;
           // Bound public artwork storage instead of growing the offline cache indefinitely.
           const media = (await cache.keys()).filter(key => new URL(key.url).pathname.startsWith('/media/'));
           await Promise.all(media.slice(0, Math.max(0, media.length - 60)).map(key => cache.delete(key)));

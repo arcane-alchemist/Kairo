@@ -537,7 +537,7 @@ html[data-native="android"] #install-app, html[data-native="android"] a[href^="h
 .page-controls>span {font-size:12px;color:var(--muted);}.page-controls .button {min-height:40px;padding:9px 16px;font-size:12px;}
 .studio-event-list {display:grid;gap:20px;}
 .studio-event-card {display:grid;grid-template-columns:130px minmax(0,1fr);align-items:center;gap:25px;border:1px solid var(--line);border-radius:20px;background:var(--paper);padding:24px;}
-.studio-event-art img {display:block;width:100%;aspect-ratio:1;border-radius:50%;object-fit:cover;}
+.studio-event-art img {display:block;width:100%;height:auto;aspect-ratio:1;border-radius:50%;object-fit:cover;}
 .studio-event-meta {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
 .studio-event-info h2 {font-family:'Outfit',sans-serif;font-size:26px;letter-spacing:-.035em;line-height:1.15;margin:14px 0 10px;overflow-wrap:anywhere;}
 .studio-event-info>p {font-size:13px;line-height:1.6;color:var(--muted);margin:0 0 14px;}

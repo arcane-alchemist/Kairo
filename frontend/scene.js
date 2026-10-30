@@ -130,9 +130,11 @@ export async function mountCoin(stage, spinButton, pauseButton) {
     if (visible && !document.hidden && (!calm || moving)) frame = requestAnimationFrame(render);
   }
   function run() { if (!frame && visible && !document.hidden) { last = 0; frame = requestAnimationFrame(render); } }
+  let previousWidth = 0, previousHeight = 0;
   const resize = () => {
     const width = stage.clientWidth, height = stage.clientHeight;
-    if (!width || !height) return;
+    if (!width || !height || (width === previousWidth && height === previousHeight)) return;
+    previousWidth = width; previousHeight = height;
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.position.z = width < 400 ? 8.05 : 7.3;
@@ -150,6 +152,7 @@ export async function mountCoin(stage, spinButton, pauseButton) {
     stage.setPointerCapture(event.pointerId);
   });
   stage.addEventListener('pointermove', event => {
+    if (!dragging && event.pointerType !== 'mouse') return;
     const box = stage.getBoundingClientRect();
     if (dragging) targetYaw = startYaw + (event.clientX - startX) * (event.pointerType === 'mouse' ? .012 : Math.PI * 2 / Math.max(box.width * .65, 1));
     else if (event.pointerType === 'mouse') { targetYaw = -.36 + ((event.clientX - box.left) / box.width - .5) * .7; targetPitch = .12 + ((event.clientY - box.top) / box.height - .5) * .3; }

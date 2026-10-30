@@ -6,9 +6,10 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('./scene.js', import.meta.url), 'utf8');
 function controls(width = 360) {
   const handlers = {}, captured = new Set();
+  let layoutReads=0;
   const stage = {
     addEventListener: (name, handler) => { handlers[name] = handler; },
-    getBoundingClientRect: () => ({left:0, top:0, width, height:420}),
+    getBoundingClientRect: () => {layoutReads++;return {left:0, top:0, width, height:420};},
     setPointerCapture: id => captured.add(id),
     hasPointerCapture: id => captured.has(id),
     releasePointerCapture: id => captured.delete(id)
@@ -16,7 +17,7 @@ function controls(width = 360) {
   const context = vm.createContext({stage, Math, run(){}});
   vm.runInContext('let dragging=false,startX=0,startYaw=0,targetYaw=0,targetPitch=.12;' + source.slice(source.indexOf("  stage.addEventListener('pointerdown'"), source.indexOf("  document.addEventListener('poap-motion'")), context);
   const fire = (name, values = {}) => handlers[name]({isPrimary:true, button:0, pointerId:1, pointerType:'touch', clientX:0, clientY:0, detail:1, preventDefault(){}, ...values});
-  return {fire, yaw:() => vm.runInContext('targetYaw', context), captured};
+  return {fire, yaw:() => vm.runInContext('targetYaw', context), captured, layoutReads:()=>layoutReads};
 }
 
 test('a short touch swipe rotates the coin equally on phone and tablet and keeps its position on release', () => {
@@ -55,4 +56,27 @@ test('mouse dragging retains its existing sensitivity', () => {
   fire('pointerdown', {pointerType:'mouse'});
   fire('pointermove', {pointerType:'mouse', clientX:100});
   assert.equal(yaw(), 1.2);
+});
+
+test('idle touch movement avoids layout reads while dragging remains responsive',()=>{
+ const {fire,layoutReads}=controls();
+ fire('pointermove');assert.equal(layoutReads(),0);
+ fire('pointerdown');fire('pointermove',{clientX:100});assert.equal(layoutReads(),1);
+ fire('pointerup');fire('pointermove');assert.equal(layoutReads(),1);
+});
+
+test('coin resizes once per size change across phone, tablet and laptop dimensions',()=>{
+ const sizes=[];
+ const stage={clientWidth:360,clientHeight:420};
+ const camera={position:{z:0},updateProjectionMatrix(){}};
+ const context=vm.createContext({stage,camera,renderer:{setSize:(...size)=>sizes.push(size)},run(){}});
+ const start=source.indexOf('  let previousWidth');
+ vm.runInContext(source.slice(start,source.indexOf('  new ResizeObserver',start))+';globalThis.resize=resize;',context);
+ for(const [width,height] of [[360,420],[820,600],[1280,720]]){
+  stage.clientWidth=width;stage.clientHeight=height;
+  context.resize();context.resize();
+  assert.equal(camera.aspect,width/height);
+ }
+ assert.deepEqual(sizes,[[360,420],[820,600],[1280,720]]);
+ stage.clientWidth=0;context.resize();assert.equal(sizes.length,3);
 });

@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import vm from 'node:vm';
 const source = readFileSync(new URL('../dist/sw.js', import.meta.url), 'utf8');
+test('only artwork downloads scan and trim the media cache',async()=>{
+ const bundle=readFileSync(new URL('../dist/index.html',import.meta.url),'utf8').match(/<script[^>]*src="(\/_astro\/[^"?]+\.js)"/)[1];
+ for(const path of [bundle,'/styles.css','/api/events',`/media/art/${'a'.repeat(64)}.png`]){
+  const handlers={},deleted=[];let scans=0,result,background,puts=0;
+  vm.runInNewContext(source,{URL,Response,self:{location:{origin:'https://kairo.test'},addEventListener:(name,fn)=>handlers[name]=fn},
+   caches:{open:async()=>({match:async()=>null,put:async()=>puts++,keys:async()=>{scans++;return Array.from({length:62},(_,i)=>({url:`https://kairo.test/media/art/${i}.png`}));},delete:async key=>deleted.push(key)})},fetch:async()=>new Response('fresh')});
+  handlers.fetch({request:{url:'https://kairo.test'+path,method:'GET',mode:'cors'},respondWith:value=>result=value,waitUntil:value=>background=value});
+  await result;await background;
+  assert.equal(puts,1);assert.equal(scans,path.startsWith('/media/')?1:0);
+  assert.equal(deleted.length,path.startsWith('/media/')?2:0);
+ }
+});
 test('offline cache excludes wallet, session, ticket and staff data, even with query strings', () => {
   const handlers = {};
   vm.runInNewContext(source, { self: { location: { origin: 'https://kairo.test' }, addEventListener: (name, fn) => { handlers[name] = fn; } }, URL });

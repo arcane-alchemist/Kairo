@@ -1,7 +1,7 @@
 // Artwork must initialize independently of API readiness and viewport observers.
 export function mountHomeArt(document, window, loaders = {
   coin: () => import('./scene.js'),
-  press: () => import('./press.js')
+  press: () => import('./press-controls.js')
 }) {
   const scenes = [
     ['#coin-stage', '#spin-coin', 'coin', module => module.mountCoin(document.querySelector('#coin-stage'), document.querySelector('#spin-coin'), document.querySelector('#pause-motion'))],
