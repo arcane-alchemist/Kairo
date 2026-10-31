@@ -125,10 +125,10 @@ test('updateNetwork shows the active network and flags a mismatch and header pla
   assert.ok(walletPos > installPos && walletPos > networkPos, 'wallet address button is on the top right side');
 });
 
-test('unknown chain is added from runtime configuration and then explicitly switched',async()=>{
+test('unknown Sepolia chain is added with fixed network settings and then explicitly switched',async()=>{
  let chain='0x1',added=false;const methods=[];const network={chainId:'0xaa36a7',rpcUrls:['https://public-rpc.test']};
  const context=vm.createContext({ensureConfig:async()=>{},config:{chainName:'Sepolia',walletNetwork:network},chainHex:()=>network.chainId,activeChain:chain,
-  walletClient:{provider:{request:async({method,params})=>{methods.push(method);if(method==='eth_chainId')return chain;if(method==='wallet_addEthereumChain'){assert.equal(params[0],network);added=true;}if(method==='wallet_switchEthereumChain'){if(!added)throw Object.assign(Error('Unknown chain'),{code:4902});chain=network.chainId;}}}},
+  walletClient:{provider:{request:async({method,params})=>{methods.push(method);if(method==='eth_chainId')return chain;if(method==='wallet_addEthereumChain'){assert.equal(params[0].chainId,'0xaa36a7');assert.equal(params[0].chainName,'Sepolia');assert.deepEqual(Array.from(params[0].rpcUrls),['https://ethereum-sepolia-rpc.publicnode.com']);added=true;}if(method==='wallet_switchEthereumChain'){if(!added)throw Object.assign(Error('Unknown chain'),{code:4902});chain=network.chainId;}}}},
   updateNetwork:async()=>{context.activeChain=chain;}
  });
  await vm.runInContext(source.slice(source.indexOf('async function switchNetwork('),source.indexOf('function headerConnect()'))+'\nswitchNetwork()',context);

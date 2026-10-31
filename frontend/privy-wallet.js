@@ -24,11 +24,15 @@ export function mountPrivy(document) {
   const timer=setTimeout(()=>failMount(new Error('Privy could not load. Check your connection and try Connect wallet again.')),20000);
   const finish = async (kind, {wallet}) => {
    const request=pending;
-   if(!request||request.kind!==kind)return;
+   if(!request||request.kind!==kind||request.finishing)return;
+   request.finishing=true;
    clearTimeout(request.timer);
-   pending=null;
-   try {request.resolve({address:wallet.address,provider:await wallet.getEthereumProvider(),name:wallet.walletClientType});}
-   catch(error){request.reject(error);}
+   try {
+    await wallet.switchChain(sepolia.id);
+    const provider=await wallet.getEthereumProvider();
+    if(pending===request)request.resolve({address:wallet.address,provider,name:wallet.walletClientType});
+   } catch(error){if(pending===request)request.reject(error);}
+   finally {if(pending===request)pending=null;}
   };
   const failed = (kind, error) => {
    const request=pending;

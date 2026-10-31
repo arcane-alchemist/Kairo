@@ -200,16 +200,16 @@ async function ensureConfig() {
   return configRequest;
 }
 function chainHex() {
-  if (!Number.isSafeInteger(config.chainId) || config.chainId <= 0) throw Error('Wallet network configuration is unavailable. Reload and try again.');
-  return `0x${config.chainId.toString(16)}`;
+  if (config.chainId !== 11155111) throw Error('Kairo requires Sepolia (11155111). Reload and try again.');
+  return '0xaa36a7';
 }
 async function switchNetwork(provider = walletClient.provider, updateHeader = true) {
   await ensureConfig();
   if (await provider.request({method:'eth_chainId'}) !== chainHex()) {
     try { await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:chainHex()}]}); }
     catch (error) {
-      if (error.code !== 4902 || !config.walletNetwork) throw error;
-      await provider.request({method:'wallet_addEthereumChain',params:[config.walletNetwork]});
+      if (Number(error.code ?? error.data?.originalError?.code) !== 4902) throw error;
+      await provider.request({method:'wallet_addEthereumChain',params:[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://ethereum-sepolia-rpc.publicnode.com'],blockExplorerUrls:['https://sepolia.etherscan.io']}]});
       await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:chainHex()}]});
     }
   }

@@ -9,7 +9,7 @@ async function bridge({ready=true,authenticated=false,logoutError,loginError,res
  let state=null,render,activeWallets=[];
  const effects=[];
  const context=vm.createContext({
-  sepolia:{},PrivyProvider:()=>{},
+  sepolia:{id:11155111},PrivyProvider:()=>{},
   setTimeout:setTimer,clearTimeout:clearTimer,
   createElement:(type,props,...children)=>({type,props,children}),
   createRoot:()=>({render(element){render=()=>{element.children[0].type();while(effects.length)effects.shift()();};render();},unmount(){}}),
@@ -45,7 +45,7 @@ test('a restored Privy session stays quiet until Connect, then opens authenticat
  await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(calls,['logout',['auth']]);
  const address='0x2222222222222222222222222222222222222222',provider={request(){}};
- setWallets([{address,walletClientType:'privy',getEthereumProvider:async()=>provider}]);
+ setWallets([{address,switchChain:async()=>{},walletClientType:'privy',getEthereumProvider:async()=>provider}]);
  callbacks.auth.onComplete({loginAccount:{type:'email',address:'person@example.test'},user:{wallet:{address}}});
  assert.equal((await connection).provider,provider);
 });
@@ -80,7 +80,7 @@ test('page-load warmup and the authentication bridge share one mount and open lo
  await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(mounted.calls,[['auth']]);assert.equal(loads,1);
  const address='0x1111111111111111111111111111111111111111',provider={request(){}};
- mounted.setWallets([{address,walletClientType:'metamask',getEthereumProvider:async()=>provider}]);
+ mounted.setWallets([{address,switchChain:async()=>{},walletClientType:'metamask',getEthereumProvider:async()=>provider}]);
  mounted.callbacks.auth.onComplete({loginAccount:{type:'wallet',address},user:{wallet:{address}}});
  const wallet=await connection;
  assert.equal(wallet.address,address);assert.equal(wallet.provider,provider);
@@ -93,7 +93,7 @@ test('switch chooser ignores an earlier authentication cancellation and resolves
  const connection=sdk.connect(undefined,{switchAccount:true});
  callbacks.auth.onError('exited_auth_flow');
  const provider={request(){}};
- callbacks.wallet.onSuccess({wallet:{address:'0x1111111111111111111111111111111111111111',walletClientType:'rainbow',getEthereumProvider:async()=>provider}});
+ callbacks.wallet.onSuccess({wallet:{address:'0x1111111111111111111111111111111111111111',switchChain:async()=>{},walletClientType:'rainbow',getEthereumProvider:async()=>provider}});
  assert.equal((await connection).provider,provider);
  assert.equal(calls[0][0],'wallet');assert.equal(calls[0][1],undefined);
  assert(!calls.includes('logout'));
@@ -115,7 +115,7 @@ test('Connect wallet opens Privy authentication and waits for the selected Ether
  assert.equal(calls[0][0],'auth');
  callbacks.auth.onComplete({loginAccount:{type:'wallet',address},user:{wallet:{address}}});
  await new Promise(resolve=>setImmediate(resolve));
- setWallets([{address,walletClientType:'metamask',getEthereumProvider:async()=>provider}]);
+ setWallets([{address,switchChain:async()=>{},walletClientType:'metamask',getEthereumProvider:async()=>provider}]);
  const result=await connection;
  assert.equal(result.address,address);assert.equal(result.provider,provider);
 });
@@ -124,7 +124,7 @@ test('email authentication uses the embedded wallet rather than the email addres
  const {sdk,callbacks,setWallets}=await bridge();
  const address='0x2222222222222222222222222222222222222222',provider={request(){}};
  const connection=sdk.connect();
- setWallets([{address,walletClientType:'privy',getEthereumProvider:async()=>provider}]);
+ setWallets([{address,switchChain:async()=>{},walletClientType:'privy',getEthereumProvider:async()=>provider}]);
  callbacks.auth.onComplete({loginAccount:{type:'email',address:'person@example.test'},user:{wallet:{address}}});
  const result=await connection;
  assert.equal(result.address,address);assert.equal(result.provider,provider);
@@ -134,3 +134,19 @@ test('email authentication uses the embedded wallet rather than the email addres
 test('a stalled Privy initialization fails with a retry message instead of leaving Connect wallet busy',async()=>{
  await assert.rejects(bridge({ready:false,setTimer:fn=>{queueMicrotask(fn);return 1;},clearTimer(){}}),/Privy could not load.*try Connect wallet again/);
 });
+
+ test('Privy switches the selected mobile wallet to Sepolia before returning its provider',async()=>{
+  for(const name of ['metamask','rainbow','coinbase_wallet','wallet_connect','privy']) {
+   const {sdk,callbacks}=await bridge();const steps=[],provider={request(){}};
+   const connection=sdk.connect(['metamask']);
+   callbacks.wallet.onSuccess({wallet:{address:'0x1111111111111111111111111111111111111111',walletClientType:name,
+    switchChain:async chain=>{assert.equal(chain,11155111);steps.push('switch');},getEthereumProvider:async()=>{steps.push('provider');return provider;}}});
+   assert.equal((await connection).provider,provider);assert.deepEqual(steps,['switch','provider']);
+  }
+ });
+ test('rejecting Sepolia switching rejects the connection and permits retry',async()=>{
+  const {sdk,callbacks}=await bridge();let providers=0;
+  const wallet={address:'0x1111111111111111111111111111111111111111',walletClientType:'metamask',switchChain:async()=>{throw Object.assign(Error('Cancelled'),{code:4001});},getEthereumProvider:async()=>{providers++;}};
+  const connection=sdk.connect(['metamask']);const failed=assert.rejects(connection,{code:4001});callbacks.wallet.onSuccess({wallet});await failed;assert.equal(providers,0);
+  wallet.switchChain=async()=>{};const retry=sdk.connect(['metamask']);callbacks.wallet.onSuccess({wallet});await retry;assert.equal(providers,1);
+ });
